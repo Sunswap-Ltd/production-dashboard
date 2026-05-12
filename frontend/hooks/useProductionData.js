@@ -1,6 +1,6 @@
 import {useMemo} from 'react';
 import {useBase, useRecords} from '@airtable/blocks/interface/ui';
-import {TABLES, FIELDS, ASN_STATUS, BREAK_TYPE, BREAK_STATUS, GOODS_STATUS, EMPLOYEE_STATUS, CHECKIN_STATUS, DEFECT_STATUS} from '../engine/constants';
+import {TABLES, FIELDS, ASN_STATUS, GOODS_STATUS, EMPLOYEE_STATUS, CHECKIN_STATUS, DEFECT_STATUS} from '../engine/constants';
 import {safeStr, safeNum, safeLink, safeAttachment, durationToHours} from '../engine/helpers';
 import {computeYamazumi, computeAttendance, computeLineBalance, findBottleneck} from '../engine/calculations';
 
@@ -16,7 +16,6 @@ export function useProductionData() {
     const base = useBase();
 
     const sessionsTable = getTable(base, TABLES.ASSEMBLY_SESSIONS);
-    const breaksTable = getTable(base, TABLES.PRODUCTION_BREAKS);
     const buildsTable = getTable(base, TABLES.BUILDS);
     const vmrTable = getTable(base, TABLES.VARIANT_MFG_RELEASE);
     const vconfigTable = getTable(base, TABLES.VARIANT_CONFIG);
@@ -33,7 +32,6 @@ export function useProductionData() {
 
     const fallback = base.tables[0];
     const sessionRecords = useRecords(sessionsTable || fallback);
-    const breakRecords = useRecords(breaksTable || fallback);
     const buildRecords = useRecords(buildsTable || fallback);
     const vmrRecords = useRecords(vmrTable || fallback);
     const vconfigRecords = useRecords(vconfigTable || fallback);
@@ -188,33 +186,6 @@ export function useProductionData() {
             }
         }
 
-        // --- Parse breaks ---
-        const breaksBySessionId = {};
-        const activeAndons = [];
-        if (breaksTable) {
-            for (const r of breakRecords) {
-                const sessionLinks = safeLink(r, FIELDS.BREAK.ASSEMBLY_SESSION);
-                const breakType = safeStr(r, FIELDS.BREAK.BREAK_TYPE);
-                const status = safeStr(r, FIELDS.BREAK.STATUS);
-                const cause = safeStr(r, FIELDS.BREAK.CAUSE);
-                const start = safeStr(r, FIELDS.BREAK.START);
-
-                for (const link of sessionLinks) {
-                    if (!breaksBySessionId[link.id]) breaksBySessionId[link.id] = [];
-                    breaksBySessionId[link.id].push({breakType, status, cause, start});
-                }
-
-                if (breakType === BREAK_TYPE.ANDON && status === BREAK_STATUS.IN_PROGRESS) {
-                    activeAndons.push({
-                        id: r.id,
-                        cause,
-                        start,
-                        sessionIds: sessionLinks.map(l => l.id),
-                    });
-                }
-            }
-        }
-
         // --- Parse assembly sessions ---
         const allSessions = [];
         const activeSessionsByStation = {};
@@ -248,16 +219,13 @@ export function useProductionData() {
             const buildId = buildLinks.length > 0 ? buildLinks[0].id : null;
             const buildName = buildLinks.length > 0 ? buildLinks[0].name : '';
 
-            const sessionBreaks = breaksBySessionId[r.id] || [];
-            const hasActiveAndon = sessionBreaks.some(
-                b => b.breakType === BREAK_TYPE.ANDON && b.status === BREAK_STATUS.IN_PROGRESS
-            );
-            const andonCause = hasActiveAndon
-                ? (sessionBreaks.find(b => b.breakType === BREAK_TYPE.ANDON && b.status === BREAK_STATUS.IN_PROGRESS) || {}).cause
-                : null;
-            const andonStart = hasActiveAndon
-                ? (sessionBreaks.find(b => b.breakType === BREAK_TYPE.ANDON && b.status === BREAK_STATUS.IN_PROGRESS) || {}).start
-                : null;
+            // Andon state comes from the session's own fields, not Production Breaks. A session
+            // is in andon when Status=Paused AND the Andon Flag lookup contains "Andon". Production
+            // Breaks records are unreliable (often left "In Progress" after the session moves on).
+            const andonFlag = safeStr(r, FIELDS.ASN.ANDON_FLAG);
+            const hasActiveAndon = status === ASN_STATUS.PAUSED && andonFlag.includes('Andon');
+            const andonCause = hasActiveAndon ? safeStr(r, FIELDS.ASN.ANDON_CAUSE) : null;
+            const andonStart = null;
 
             const actualTimeHrs = actualTime / 3600;
             const productionRatePct = actualTimeHrs > 0 ? (progress * 100) / actualTimeHrs : 0;
@@ -1082,31 +1050,30 @@ export function useProductionData() {
             : teamMembers;
         const attendance = computeAttendance(directAssemblyTeam);
 
-        // --- Andon alerts (now with areaId so AreaBanners can bucket per area) ---
+        // --- Andon alerts: one entry per Assembly Session currently flagged as andon ---
+        // Source-of-truth is the session itself (Status=Paused + Andon Flag=Andon), not the
+        // Production Breaks table. AreaBanners + the Andons KPI card consume this list.
         const andonAlerts = [];
-        for (const andon of activeAndons) {
-            for (const sessionId of andon.sessionIds) {
-                const session = allSessions.find(s => s.id === sessionId);
-                if (!session) continue;
-                const sessionOpVer = session.opVerId ? opVersionsById[session.opVerId] : null;
-                andonAlerts.push({
-                    id: andon.id,
-                    station: session.station,
-                    cause: andon.cause,
-                    start: andon.start,
-                    buildName: session.buildName,
-                    techName: session.techName,
-                    techPicture: session.techPicture,
-                    areaId: areaIdByStationTitle[session.station] || null,
-                    lineName: lineNameByStationTitle[session.station] || null,
-                    opVerId: session.opVerId || null,
-                    opVerName: sessionOpVer ? sessionOpVer.name : '',
-                    opVerPhoto: sessionOpVer ? sessionOpVer.photo : null,
-                    // AreaBanners.Thumb reads `thumbnail` — for andons it's the op-version
-                    // photo, falling back to the operator's profile picture.
-                    thumbnail: (sessionOpVer && sessionOpVer.photo) || session.techPicture || null,
-                });
-            }
+        for (const session of allSessions) {
+            if (!session.hasAndon) continue;
+            const sessionOpVer = session.opVerId ? opVersionsById[session.opVerId] : null;
+            andonAlerts.push({
+                id: session.id,
+                station: session.station,
+                cause: session.andonCause,
+                start: session.andonStart,
+                buildName: session.buildName,
+                techName: session.techName,
+                techPicture: session.techPicture,
+                areaId: areaIdByStationTitle[session.station] || null,
+                lineName: lineNameByStationTitle[session.station] || null,
+                opVerId: session.opVerId || null,
+                opVerName: sessionOpVer ? sessionOpVer.name : '',
+                opVerPhoto: sessionOpVer ? sessionOpVer.photo : null,
+                // AreaBanners.Thumb reads `thumbnail` — for andons it's the op-version
+                // photo, falling back to the operator's profile picture.
+                thumbnail: (sessionOpVer && sessionOpVer.photo) || session.techPicture || null,
+            });
         }
 
         // --- Open defects, grouped per area via the Op Version → Station → Area lookup ----
@@ -1191,7 +1158,7 @@ export function useProductionData() {
             isLoading: false,
         };
     }, [
-        sessionRecords, breakRecords, buildRecords, vmrRecords, vconfigRecords,
+        sessionRecords, buildRecords, vmrRecords, vconfigRecords,
         stationRecords, lineRecords, areaRecords, opVersionRecords, teamRecords,
         buildSlotRecords, timesheetRecords, settingsRecords, defectRecords,
     ]);
