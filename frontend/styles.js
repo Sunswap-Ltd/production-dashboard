@@ -61,10 +61,10 @@ export const layout = {
         gridRow: '2',
         backgroundColor: COLOURS.panelBg,
         borderBottom: `1px solid ${COLOURS.tarmac}`,
-        padding: '8px 16px',
+        padding: '14px 20px',
         display: 'flex',
         alignItems: 'stretch',
-        gap: 10,
+        gap: 14,
         overflowX: 'auto',
     },
     center: {
@@ -133,34 +133,36 @@ export const header = {
 };
 
 export const metrics = {
+    // Sized for the doubled KPI strip (128 px). Values are the dominant glyph — readable across
+    // the office at wall-display distance — with label and sub kept compact above/below.
     card: {
         backgroundColor: COLOURS.cardBg,
-        borderRadius: 6,
-        padding: '6px 14px',
+        borderRadius: 8,
+        padding: '12px 20px',
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'center',
-        minWidth: 110,
+        minWidth: 170,
         flexShrink: 0,
     },
     label: {
-        fontSize: 9,
+        fontSize: 13,
         fontWeight: 600,
         textTransform: 'uppercase',
-        letterSpacing: 0.8,
+        letterSpacing: 1,
         color: COLOURS.road,
-        marginBottom: 2,
+        marginBottom: 4,
     },
     value: {
-        fontSize: 18,
+        fontSize: 38,
         fontWeight: 700,
-        lineHeight: 1.1,
+        lineHeight: 1.05,
         color: COLOURS.snow,
     },
     sub: {
-        fontSize: 9,
+        fontSize: 12,
         color: COLOURS.road,
-        marginTop: 1,
+        marginTop: 3,
     },
 };
 
