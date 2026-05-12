@@ -138,7 +138,9 @@ export default function OpTile({cell, size = 22}) {
         );
     }
 
-    const borderColour = STATE_COLOURS[state] || COLOURS.tarmac;
+    // Pending cells get no frame and no tint — let the photo (grayscaled below) speak for
+    // itself. Transparent border keeps the box-sizing identical to the other states.
+    const borderColour = state === 'pending' ? 'transparent' : (STATE_COLOURS[state] || COLOURS.tarmac);
     const isAllDone = state === 'completed';
     const piePct = Math.round((cell.completionFraction || 0) * 100);
     // Pie shows progress for any cell with partial completion (regardless of state), except
