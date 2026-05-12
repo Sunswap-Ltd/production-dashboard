@@ -138,7 +138,7 @@ export default function App() {
             </div>
 
             <div style={layout.kpiStrip}>
-                <MetricsPanel data={data} />
+                <MetricsPanel data={data} selectedLine={selectedLine} />
             </div>
 
             <div style={layout.center}>

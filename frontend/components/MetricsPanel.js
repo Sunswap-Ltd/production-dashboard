@@ -11,10 +11,14 @@ function MetricCard({label, value, sub, colour}) {
     );
 }
 
-export default function MetricsPanel({data}) {
+export default function MetricsPanel({data, selectedLine}) {
     const {metrics: m} = data;
-    const openDefects = data.openDefects || [];
-    const andonAlerts = data.andonAlerts || [];
+    // Filter to the selected line. Each andon/defect carries a lineName resolved via its
+    // station -> area -> line lookup in the hook. Items with null lineName (e.g. a defect on
+    // an op-version we can't resolve to a known active station) are excluded from the count.
+    const matchesLine = (item) => !selectedLine || item.lineName === selectedLine;
+    const openDefects = (data.openDefects || []).filter(matchesLine);
+    const andonAlerts = (data.andonAlerts || []).filter(matchesLine);
     // Andon alerts are flattened to one entry per (andon record, linked session). Unique =
     // distinct andon records currently active; total = the flattened count, i.e. how many
     // sessions are affected. Showing both makes "one big andon spanning 3 stations" legible.

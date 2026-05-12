@@ -425,10 +425,19 @@ export function useProductionData() {
         }
 
         // Map stationTitle -> areaId for the matrix grouping (ids only; full area looked up later).
+        // Also map stationTitle -> lineName via the area's linked line, used by MetricsPanel to
+        // filter andons and defects to the currently selected line. Areas in this base link to a
+        // single line in practice — take the first.
         const areaIdByStationTitle = {};
+        const lineNameByStationTitle = {};
         for (const station of stations) {
             const a = areaByStationId[station.id];
-            if (a) areaIdByStationTitle[station.title] = a.id;
+            if (a) {
+                areaIdByStationTitle[station.title] = a.id;
+                const firstLineId = a.lineIds[0];
+                const line = firstLineId ? linesById[firstLineId] : null;
+                if (line) lineNameByStationTitle[station.title] = line.name;
+            }
         }
         const areaById = {};
         for (const a of areas) areaById[a.id] = a;
@@ -1091,6 +1100,7 @@ export function useProductionData() {
                     techName: session.techName,
                     techPicture: session.techPicture,
                     areaId: areaIdByStationTitle[session.station] || null,
+                    lineName: lineNameByStationTitle[session.station] || null,
                     opVerName: sessionOpVer ? sessionOpVer.name : '',
                     opVerPhoto: sessionOpVer ? sessionOpVer.photo : null,
                     // AreaBanners.Thumb reads `thumbnail` — for andons it's the op-version
@@ -1131,6 +1141,7 @@ export function useProductionData() {
                     opVerName,
                     station,
                     areaId,
+                    lineName: station ? (lineNameByStationTitle[station] || null) : null,
                     buildJobId: build ? build.buildId : '',
                     buildNickname: build ? build.nickname : '',
                     thumbnail,
