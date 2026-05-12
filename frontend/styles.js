@@ -32,7 +32,7 @@ export const STATE_COLOURS = {
     paused:    '#F59E0B',  // amber-orange
     andon:     COLOURS.red,
     scheduled: '#3B82F6',  // blue
-    pending:   '#9CA3AF',  // grey
+    pending:   '#ffffff',  // white frame, no tint
 };
 
 const FONT_STACK = "'Arbeit', Arial, Helvetica, Calibri, sans-serif";
