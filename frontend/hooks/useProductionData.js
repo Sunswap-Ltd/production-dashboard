@@ -554,6 +554,7 @@ export function useProductionData() {
                         s => s.status === ASN_STATUS.IN_PROGRESS || s.status === ASN_STATUS.PAUSED
                     );
                     const pausedSessions = liveSessions.filter(s => s.status === ASN_STATUS.PAUSED);
+                    const scheduledSessions = opSessions.filter(s => s.status === ASN_STATUS.SCHEDULED);
                     const andonSessions = liveSessions.filter(s => s.hasAndon);
                     const andonUnknownSessions = andonSessions.filter(s => isUnknownCause(s.andonCause));
 
@@ -586,6 +587,7 @@ export function useProductionData() {
                         existingCell.completed += Math.min(completedCount, repeats);
                         existingCell.live += liveSessions.length;
                         existingCell.paused += pausedSessions.length;
+                        existingCell.scheduled += scheduledSessions.length;
                         existingCell.andon += andonSessions.length;
                         existingCell.andonUnknown = existingCell.andonUnknown || andonUnknownSessions.length > 0;
                         if (!existingCell.liveSession && liveSessions.length > 0) existingCell.liveSession = liveSessions[0];
@@ -622,6 +624,7 @@ export function useProductionData() {
                             completed: completedCount,
                             live: liveSessions.length,
                             paused: pausedSessions.length,
+                            scheduled: scheduledSessions.length,
                             andon: andonSessions.length,
                             andonUnknown: andonUnknownSessions.length > 0,
                             liveOperators,
@@ -637,15 +640,16 @@ export function useProductionData() {
                 }
 
                 // Final state + completionFraction pass per cell (after possible aggregation across versions).
+                // Most-active-wins priority: Andon > In Progress > Paused > Completed > Scheduled > Pending.
+                // Matches the user-facing Airtable status palette on Assembly Sessions.
                 for (const key of Object.keys(cellMap)) {
                     const c = cellMap[key];
                     let state = 'pending';
                     if (c.andon > 0) state = 'andon';
                     else if (c.live > c.paused) state = 'live';
                     else if (c.paused > 0) state = 'paused';
-                    else if (c.completed >= c.needed && c.needed > 0) state = 'completed';
-                    else if (c.completed > 0) state = 'partial';
-                    if (isCompleted) state = 'completed';
+                    else if (c.completed > 0 || isCompleted) state = 'completed';
+                    else if ((c.scheduled || 0) > 0) state = 'scheduled';
                     c.state = state;
 
                     // completionFraction = (completed repeats + avg live progress for in-flight repeats) / needed
@@ -692,6 +696,7 @@ export function useProductionData() {
                         s => s.status === ASN_STATUS.IN_PROGRESS || s.status === ASN_STATUS.PAUSED
                     );
                     const pausedSessions = liveSessions.filter(s => s.status === ASN_STATUS.PAUSED);
+                    const scheduledSessions = orphan.sessions.filter(s => s.status === ASN_STATUS.SCHEDULED);
                     const andonSessions = liveSessions.filter(s => s.hasAndon);
                     const andonUnknownSessions = andonSessions.filter(s => isUnknownCause(s.andonCause));
 
@@ -707,14 +712,15 @@ export function useProductionData() {
                         .map(id => opVersionsById[id]?.versionLabel)
                         .filter(Boolean);
 
+                    // Same most-active-wins priority as the main cell loop.
                     let state = 'pending';
                     const completedCount = completedSessions.length;
                     const needed = orphan.sessions.length;
                     if (andonSessions.length > 0) state = 'andon';
                     else if (liveSessions.length > pausedSessions.length) state = 'live';
                     else if (pausedSessions.length > 0) state = 'paused';
-                    else if (completedCount >= needed && needed > 0) state = 'completed';
-                    else if (completedCount > 0) state = 'partial';
+                    else if (completedCount > 0) state = 'completed';
+                    else if (scheduledSessions.length > 0) state = 'scheduled';
 
                     const liveBag = liveSessions.map(s => s.progress || 0);
                     const avgLiveProgress = liveBag.length > 0
@@ -740,6 +746,7 @@ export function useProductionData() {
                         completed: completedCount,
                         live: liveSessions.length,
                         paused: pausedSessions.length,
+                        scheduled: scheduledSessions.length,
                         andon: andonSessions.length,
                         andonUnknown: andonUnknownSessions.length > 0,
                         liveOperators,

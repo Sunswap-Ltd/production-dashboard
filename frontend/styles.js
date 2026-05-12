@@ -23,13 +23,16 @@ const COLOURS = {
 
 export {COLOURS};
 
+// Frame colours mirror the Airtable Assembly Sessions Status single-select
+// palette so the dashboard speaks the same colour language as the record view.
+// Andon retains the project's existing red (used by the andon-pulse keyframe).
 export const STATE_COLOURS = {
-    completed: COLOURS.green,
-    partial: COLOURS.green,
-    live: COLOURS.sol,
-    paused: COLOURS.amber,
-    andon: COLOURS.red,
-    pending: COLOURS.tarmac,
+    completed: '#15803D',  // dark green
+    live:      '#4ADE80',  // light green
+    paused:    '#F59E0B',  // amber-orange
+    andon:     COLOURS.red,
+    scheduled: '#3B82F6',  // blue
+    pending:   '#9CA3AF',  // grey
 };
 
 const FONT_STACK = "'Arbeit', Arial, Helvetica, Calibri, sans-serif";

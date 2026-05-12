@@ -128,11 +128,11 @@ export default function OpTile({cell, size = 22}) {
     }
 
     const borderColour = STATE_COLOURS[state] || COLOURS.tarmac;
-    const isLive = state === 'live' || state === 'paused' || state === 'andon';
     const isAllDone = state === 'completed';
-    const isPartial = state === 'partial';
-    const showPie = (isLive || isPartial) && !isAllDone;
     const piePct = Math.round((cell.completionFraction || 0) * 100);
+    // Pie shows progress for any cell with partial completion (regardless of state), except
+    // andon — andon already pulses red, so an in-cell pie would just compete for attention.
+    const showPie = piePct > 0 && piePct < 100 && state !== 'andon';
 
     // Format completion minutes for the bottom-right badge: "12m" up to 99m, "1h32" beyond.
     const formatMinutes = (mins) => {
@@ -143,11 +143,13 @@ export default function OpTile({cell, size = 22}) {
         const m = total % 60;
         return m === 0 ? `${h}h` : `${h}h${m}`;
     };
-    const minuteLabel = isAllDone ? formatMinutes(cell.completionMinutes) : '';
-    const pieColour = state === 'paused' ? COLOURS.amber
-        : state === 'andon' ? COLOURS.red
-        : state === 'live' ? COLOURS.sol
-        : COLOURS.green; // partial
+    // Show minute badge on any cell with a known completion time (median across done repeats),
+    // not just fully-done cells — partial completions still benefit from showing avg minutes.
+    const minuteLabel = (state === 'completed' || cell.completionMinutes > 0)
+        ? formatMinutes(cell.completionMinutes) : '';
+    // Pie colour mirrors the frame: pies inherit the cell's status palette so the cell reads
+    // as one coherent piece (light-green pie on a light-green frame for live, etc.).
+    const pieColour = STATE_COLOURS[state] || COLOURS.green;
     const firstOperator = cell.liveOperators && cell.liveOperators.length > 0 ? cell.liveOperators[0] : null;
     const extraOperators = cell.liveOperators ? Math.max(0, cell.liveOperators.length - 1) : 0;
     const headshotSize = Math.max(13, Math.round(size * 0.42));
@@ -165,7 +167,7 @@ export default function OpTile({cell, size = 22}) {
                     width: size,
                     height: size,
                     borderRadius: 3,
-                    border: `2px solid ${borderColour}`,
+                    border: `3px solid ${borderColour}`,
                     backgroundColor: cell.opVerPhoto ? COLOURS.motorway : COLOURS.tarmac,
                     overflow: 'hidden',
                     flexShrink: 0,
@@ -189,13 +191,6 @@ export default function OpTile({cell, size = 22}) {
                             filter: state === 'pending' ? 'grayscale(1) brightness(0.5)' : isAllDone ? 'brightness(0.7)' : 'none',
                         }}
                     />
-                )}
-                {isAllDone && (
-                    <div style={{
-                        position: 'absolute', inset: 0,
-                        background: 'rgba(34, 197, 94, 0.45)',
-                        pointerEvents: 'none',
-                    }} />
                 )}
                 {showPie && (
                     <div
