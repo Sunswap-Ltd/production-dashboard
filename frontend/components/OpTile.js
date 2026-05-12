@@ -10,7 +10,7 @@ const STATE_TINTS = {
     paused:    'rgba(245, 158, 11, 0.30)',  // #F59E0B
     andon:     'rgba(239, 68, 68, 0.30)',   // #ef4444
     scheduled: 'rgba(59, 130, 246, 0.30)',  // #3B82F6
-    // pending intentionally omitted — frame absent + no tint = "not yet started".
+    pending:   'rgba(155, 155, 155, 0.20)', // Road #9b9b9b — subtle grey wash
 };
 
 const STATE_LABEL = {
