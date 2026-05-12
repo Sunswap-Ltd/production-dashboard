@@ -13,6 +13,29 @@ const STATE_TINTS = {
     pending:   'rgba(155, 155, 155, 0.20)', // Road #9b9b9b — subtle grey wash
 };
 
+// Generic image-not-available glyph rendered when an op-version has no photo. Inline SVG
+// (no extra asset file), Road-grey on Frost — matches the brand palette and reads at 38 px.
+function PhotoPlaceholder() {
+    return (
+        <svg
+            viewBox="0 0 24 24"
+            width="100%"
+            height="100%"
+            preserveAspectRatio="xMidYMid meet"
+            style={{display: 'block', background: '#e6e2db'}}
+            aria-hidden="true"
+        >
+            {/* rounded frame */}
+            <rect x="3" y="4.5" width="18" height="15" rx="1.8" ry="1.8"
+                  fill="none" stroke="#9b9b9b" strokeWidth="1.6" />
+            {/* sun */}
+            <circle cx="15.5" cy="9.5" r="1.6" fill="#9b9b9b" />
+            {/* mountains */}
+            <path d="M4.5 18 L10 11.5 L13.5 15 L15.5 13 L19.5 18 Z" fill="#9b9b9b" />
+        </svg>
+    );
+}
+
 const STATE_LABEL = {
     completed: '✓ done',
     partial: '◐ partial',
@@ -197,7 +220,7 @@ export default function OpTile({cell, size = 22}) {
                         : {}),
                 }}
             >
-                {cell.opVerPhoto && (
+                {cell.opVerPhoto ? (
                     <img
                         src={cell.opVerPhoto}
                         alt=""
@@ -208,6 +231,13 @@ export default function OpTile({cell, size = 22}) {
                             filter: isAllDone ? 'brightness(0.7)' : 'none',
                         }}
                     />
+                ) : (
+                    <div style={{
+                        position: 'absolute', inset: 0,
+                        filter: isAllDone ? 'brightness(0.7)' : 'none',
+                    }}>
+                        <PhotoPlaceholder />
+                    </div>
                 )}
                 {STATE_TINTS[state] && (
                     // Subtle state-coloured wash (30 %) over the photo — a faint hint that
