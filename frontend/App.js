@@ -6,7 +6,6 @@ import MetricsPanel from './components/MetricsPanel';
 import Matrix from './components/Matrix';
 import FooterBar from './components/FooterBar';
 import SettingsPopover from './components/SettingsPopover';
-import AreaBanners from './components/AreaBanners';
 
 const DEFAULT_LINE_HINT = 'Endurance';
 
@@ -127,7 +126,6 @@ export default function App() {
         const line = data.lineColumns.find(l => l.lineId === r.lineId);
         return line && line.lineName === selectedLine;
     });
-    const areaGroupsForView = (lineColumnsForView[0] && lineColumnsForView[0].areaGroups) || [];
 
     return (
         <div style={layout.container}>
@@ -144,18 +142,6 @@ export default function App() {
             </div>
 
             <div style={layout.center}>
-                <div style={{
-                    flexShrink: 0,
-                    maxHeight: '38vh',
-                    overflowY: 'auto',
-                    borderBottom: '1px solid rgba(57,57,57,0.5)',
-                }}>
-                    <AreaBanners
-                        areaGroups={areaGroupsForView}
-                        openDefects={data.openDefects || []}
-                        andonAlerts={data.andonAlerts || []}
-                    />
-                </div>
                 <div style={{flex: 1, position: 'relative', minHeight: 0}}>
                     <Matrix lineColumns={lineColumnsForView} lineMatrixRows={lineMatrixRowsForView} />
                 </div>
