@@ -5,7 +5,7 @@ import {COLOURS, STATE_COLOURS} from '../styles';
 // Per-state photo tint at 30 % opacity. Mirrors STATE_COLOURS but pre-baked as rgba so we
 // can layer a translucent wash over the op-version photo without recomputing on each render.
 const STATE_TINTS = {
-    completed: 'rgba(21, 128, 61, 0.30)',   // #15803D
+    completed: 'rgba(21, 128, 61, 0.45)',   // #15803D
     live:      'rgba(74, 222, 128, 0.30)',  // #4ADE80
     paused:    'rgba(245, 158, 11, 0.30)',  // #F59E0B
     andon:     'rgba(239, 68, 68, 0.30)',   // #ef4444
