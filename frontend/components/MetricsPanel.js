@@ -19,10 +19,15 @@ export default function MetricsPanel({data, selectedLine}) {
     const matchesLine = (item) => !selectedLine || item.lineName === selectedLine;
     const openDefects = (data.openDefects || []).filter(matchesLine);
     const andonAlerts = (data.andonAlerts || []).filter(matchesLine);
-    // Andon alerts are flattened to one entry per (andon record, linked session). Unique =
-    // distinct andon records currently active; total = the flattened count, i.e. how many
-    // sessions are affected. Showing both makes "one big andon spanning 3 stations" legible.
-    const uniqueAndons = new Set(andonAlerts.map(a => a.id)).size;
+    // Andon alerts are flattened to one entry per (andon record, linked session). "Unique" =
+    // distinct operation versions currently affected — two separate andon records raised
+    // against the same op-version collapse to 1. "Total" = the flattened count, i.e. how
+    // many in-progress sessions are impacted. Alerts whose session has no resolvable
+    // op-version are keyed by record id so they count individually rather than silently
+    // merging into a single "no-op" bucket.
+    const uniqueAndons = new Set(
+        andonAlerts.map(a => a.opVerId || `__noop__${a.id}`)
+    ).size;
     const totalAndons = andonAlerts.length;
     return (
         <>

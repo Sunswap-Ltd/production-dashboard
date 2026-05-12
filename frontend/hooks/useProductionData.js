@@ -1101,6 +1101,7 @@ export function useProductionData() {
                     techPicture: session.techPicture,
                     areaId: areaIdByStationTitle[session.station] || null,
                     lineName: lineNameByStationTitle[session.station] || null,
+                    opVerId: session.opVerId || null,
                     opVerName: sessionOpVer ? sessionOpVer.name : '',
                     opVerPhoto: sessionOpVer ? sessionOpVer.photo : null,
                     // AreaBanners.Thumb reads `thumbnail` — for andons it's the op-version
