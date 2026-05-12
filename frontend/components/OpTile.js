@@ -2,6 +2,17 @@ import React, {useState, useRef, useCallback, useEffect} from 'react';
 import ReactDOM from 'react-dom';
 import {COLOURS, STATE_COLOURS} from '../styles';
 
+// Per-state photo tint at 30 % opacity. Mirrors STATE_COLOURS but pre-baked as rgba so we
+// can layer a translucent wash over the op-version photo without recomputing on each render.
+const STATE_TINTS = {
+    completed: 'rgba(21, 128, 61, 0.30)',   // #15803D
+    live:      'rgba(74, 222, 128, 0.30)',  // #4ADE80
+    paused:    'rgba(245, 158, 11, 0.30)',  // #F59E0B
+    andon:     'rgba(239, 68, 68, 0.30)',   // #ef4444
+    scheduled: 'rgba(59, 130, 246, 0.30)',  // #3B82F6
+    pending:   'rgba(156, 163, 175, 0.30)', // #9CA3AF
+};
+
 const STATE_LABEL = {
     completed: '✓ done',
     partial: '◐ partial',
@@ -192,12 +203,12 @@ export default function OpTile({cell, size = 22}) {
                         }}
                     />
                 )}
-                {isAllDone && (
-                    // Subtle green wash (30 %) over the completed photo — a faint hint that
-                    // reinforces the dark-green frame without overpowering the underlying image.
+                {STATE_TINTS[state] && (
+                    // Subtle state-coloured wash (30 %) over the photo — a faint hint that
+                    // reinforces the frame colour without overpowering the underlying image.
                     <div style={{
                         position: 'absolute', inset: 0,
-                        background: 'rgba(21, 128, 61, 0.30)',
+                        background: STATE_TINTS[state],
                         pointerEvents: 'none',
                     }} />
                 )}
