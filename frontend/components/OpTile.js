@@ -138,9 +138,11 @@ export default function OpTile({cell, size = 22}) {
         );
     }
 
-    // Pending cells get no frame and no tint — let the photo (grayscaled below) speak for
-    // itself. Transparent border keeps the box-sizing identical to the other states.
-    const borderColour = state === 'pending' ? 'transparent' : (STATE_COLOURS[state] || COLOURS.tarmac);
+    // Pending cells get a thin 2 px grey wire frame (no tint) — present but understated, so
+    // the photo reads clearly and pending cells sit visually below the 3 px coloured frames.
+    const isPending = state === 'pending';
+    const borderColour = isPending ? COLOURS.road : (STATE_COLOURS[state] || COLOURS.tarmac);
+    const borderWidth = isPending ? 2 : 3;
     const isAllDone = state === 'completed';
     const piePct = Math.round((cell.completionFraction || 0) * 100);
     // Pie shows progress for any cell with partial completion (regardless of state), except
@@ -180,7 +182,7 @@ export default function OpTile({cell, size = 22}) {
                     width: size,
                     height: size,
                     borderRadius: 3,
-                    border: `3px solid ${borderColour}`,
+                    border: `${borderWidth}px solid ${borderColour}`,
                     // White base layer under every ASN cell so transparent / letterboxed
                     // photos read cleanly. Photo → state tint → frame stack on top.
                     backgroundColor: COLOURS.snow,
