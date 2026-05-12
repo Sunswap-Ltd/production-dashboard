@@ -9,8 +9,8 @@ const STATE_TINTS = {
     live:      'rgba(74, 222, 128, 0.30)',  // #4ADE80
     paused:    'rgba(245, 158, 11, 0.30)',  // #F59E0B
     andon:     'rgba(239, 68, 68, 0.30)',   // #ef4444
-    // scheduled + pending intentionally omitted — frame alone signals "not yet started".
-    // (A blue 30 % wash over multi-coloured photos read as muddy/grey, not crisp blue.)
+    scheduled: 'rgba(59, 130, 246, 0.30)',  // #3B82F6
+    // pending intentionally omitted — frame absent + no tint = "not yet started".
 };
 
 const STATE_LABEL = {
@@ -203,7 +203,7 @@ export default function OpTile({cell, size = 22}) {
                             width: '100%',
                             height: '100%',
                             objectFit: 'cover',
-                            filter: state === 'pending' ? 'grayscale(1) brightness(0.5)' : isAllDone ? 'brightness(0.7)' : 'none',
+                            filter: isAllDone ? 'brightness(0.7)' : 'none',
                         }}
                     />
                 )}
