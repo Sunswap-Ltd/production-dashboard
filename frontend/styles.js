@@ -45,7 +45,7 @@ export const layout = {
         color: COLOURS.text,
         fontFamily: FONT_STACK,
         display: 'grid',
-        gridTemplate: '56px 64px 1fr 48px / 1fr',
+        gridTemplate: '56px 128px 1fr 48px / 1fr',
         overflow: 'hidden',
     },
     header: {
