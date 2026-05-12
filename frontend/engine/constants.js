@@ -20,6 +20,7 @@ export const TABLES = {
 
 export const FIELDS = {
     ASN: {
+        ASSEMBLY_SESSION_ID: 'Assembly Session ID',
         STATUS: 'Status',
         TECHNICIAN: 'Technician',
         BUILD: 'Build',

@@ -194,6 +194,14 @@ export default function OpTile({cell, size = 22}) {
     const hasWarning = cell.warning && cell.warning.length > 0;
     const warningBadgeSize = Math.max(13, Math.round(size * 0.42));
 
+    // Strip the "ASN-" prefix for the top-centre badge — the column already implies it's an
+    // assembly session, and the bare digits fit at 38 px. The +N suffix flags additional
+    // sessions on the same cell (multi-repeat ops, multiple operators on the same op).
+    const asnDigits = cell.latestAsnId ? cell.latestAsnId.replace(/^ASN-/, '') : '';
+    const asnLabel = asnDigits
+        ? (cell.extraAsnCount > 0 ? `${asnDigits} +${cell.extraAsnCount}` : asnDigits)
+        : '';
+
     return (
         <>
             <div
@@ -388,6 +396,32 @@ export default function OpTile({cell, size = 22}) {
                         fontVariantNumeric: 'tabular-nums',
                     }}>
                         {cell.completed || 0}/{cell.needed}
+                    </div>
+                )}
+                {asnLabel && (
+                    <div
+                        title={cell.extraAsnCount > 0
+                            ? `Latest: ${cell.latestAsnId} (+${cell.extraAsnCount} more)`
+                            : cell.latestAsnId}
+                        style={{
+                            position: 'absolute',
+                            top: 1,
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            background: 'rgba(0,0,0,0.78)',
+                            color: COLOURS.snow,
+                            fontSize: 7,
+                            fontWeight: 700,
+                            lineHeight: 1,
+                            padding: '1px 3px',
+                            borderRadius: 2,
+                            fontVariantNumeric: 'tabular-nums',
+                            whiteSpace: 'nowrap',
+                            pointerEvents: 'none',
+                            zIndex: 3,
+                        }}
+                    >
+                        {asnLabel}
                     </div>
                 )}
                 {cell.required && cell.versionLabels && cell.versionLabels.length > 0 && (

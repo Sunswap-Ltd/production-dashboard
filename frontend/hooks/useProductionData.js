@@ -193,6 +193,7 @@ export function useProductionData() {
         const completedSessionsByStation = {};
 
         for (const r of sessionRecords) {
+            const asnId = safeStr(r, FIELDS.ASN.ASSEMBLY_SESSION_ID);
             const status = safeStr(r, FIELDS.ASN.STATUS);
             const station = safeStr(r, FIELDS.ASN.STATION);
             const progress = safeNum(r, FIELDS.ASN.PROGRESS, 0);
@@ -232,6 +233,7 @@ export function useProductionData() {
 
             const session = {
                 id: r.id,
+                asnId,
                 status,
                 station,
                 progress,
@@ -556,6 +558,10 @@ export function useProductionData() {
                         .map(s => (s.assemblyTimeHrs || 0) * 3600)
                         .filter(sec => sec > 0);
 
+                    const asnEntriesForOp = opSessions
+                        .filter(s => s.asnId)
+                        .map(s => ({asnId: s.asnId, start: s.start || ''}));
+
                     if (existingCell) {
                         // Multiple op-versions of the same operation for this slot — aggregate.
                         existingCell.needed += repeats;
@@ -570,6 +576,7 @@ export function useProductionData() {
                         existingCell._completedMinutesSum += completedMinutesSum;
                         existingCell._completedSessionCount += completedSessions.length;
                         for (const sec of completedSecondsList) existingCell._completedSecondsList.push(sec);
+                        for (const e of asnEntriesForOp) existingCell._asnEntries.push(e);
                         for (const s of liveSessions) {
                             if (s.techName && !existingCell.liveOperators.find(o => o.name === s.techName)) {
                                 existingCell.liveOperators.push({name: s.techName, picture: s.techPicture});
@@ -608,6 +615,7 @@ export function useProductionData() {
                             _completedMinutesSum: completedMinutesSum,
                             _completedSessionCount: completedSessions.length,
                             _completedSecondsList: completedSecondsList.slice(),
+                            _asnEntries: asnEntriesForOp.slice(),
                             versionLabels: opVer.versionLabel ? [opVer.versionLabel] : [],
                             state: 'pending', // recomputed below
                         };
@@ -642,9 +650,25 @@ export function useProductionData() {
                         ? c._completedMinutesSum / c._completedSessionCount
                         : 0;
 
+                    // Latest ASN on the cell (by session start, desc) for the top-centre badge.
+                    // Drops any duplicate ASN strings across op-versions so the +N counter is
+                    // truthful. Empty when the cell has no sessions with an ID.
+                    const dedup = new Map();
+                    for (const e of c._asnEntries || []) {
+                        if (!dedup.has(e.asnId) || (e.start || '') > (dedup.get(e.asnId).start || '')) {
+                            dedup.set(e.asnId, e);
+                        }
+                    }
+                    const sortedAsns = [...dedup.values()].sort(
+                        (a, b) => (b.start || '').localeCompare(a.start || ''),
+                    );
+                    c.latestAsnId = sortedAsns[0] ? sortedAsns[0].asnId : '';
+                    c.extraAsnCount = Math.max(0, sortedAsns.length - 1);
+
                     delete c._liveProgressBag;
                     delete c._completedMinutesSum;
                     delete c._completedSessionCount;
+                    delete c._asnEntries;
                 }
 
                 // ---- Orphan-cell pass: ASNs at parent operations NOT in this build's VMR ----
@@ -708,6 +732,19 @@ export function useProductionData() {
                         .map(s => (s.assemblyTimeHrs || 0) * 3600)
                         .filter(sec => sec > 0);
 
+                    const orphanAsnEntries = orphan.sessions
+                        .filter(s => s.asnId)
+                        .map(s => ({asnId: s.asnId, start: s.start || ''}));
+                    const orphanDedup = new Map();
+                    for (const e of orphanAsnEntries) {
+                        if (!orphanDedup.has(e.asnId) || (e.start || '') > (orphanDedup.get(e.asnId).start || '')) {
+                            orphanDedup.set(e.asnId, e);
+                        }
+                    }
+                    const orphanSortedAsns = [...orphanDedup.values()].sort(
+                        (a, b) => (b.start || '').localeCompare(a.start || ''),
+                    );
+
                     cellMap[key] = {
                         slotId,
                         lineId: slotLineId,
@@ -733,6 +770,8 @@ export function useProductionData() {
                         completionMinutes: completedSessions.length > 0
                             ? completedMinutesSum / completedSessions.length
                             : 0,
+                        latestAsnId: orphanSortedAsns[0] ? orphanSortedAsns[0].asnId : '',
+                        extraAsnCount: Math.max(0, orphanSortedAsns.length - 1),
                     };
 
                     // Make sure the column exists so the orphan cell can render.
