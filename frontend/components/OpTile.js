@@ -192,6 +192,15 @@ export default function OpTile({cell, size = 22}) {
                         }}
                     />
                 )}
+                {isAllDone && (
+                    // Subtle green wash (30 %) over the completed photo — a faint hint that
+                    // reinforces the dark-green frame without overpowering the underlying image.
+                    <div style={{
+                        position: 'absolute', inset: 0,
+                        background: 'rgba(21, 128, 61, 0.30)',
+                        pointerEvents: 'none',
+                    }} />
+                )}
                 {showPie && (
                     <div
                         title={`${piePct}% complete`}
