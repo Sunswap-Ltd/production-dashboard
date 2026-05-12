@@ -105,6 +105,14 @@ export function useProductionData() {
             return m ? `v${m[1]}` : '';
         };
 
+        // Strip surrounding double-quote characters from a string. Some op-version records
+        // have a Station value typed with literal `"` chars at both ends (data-entry typo).
+        // The active-stations Set is keyed by the raw station title (no surrounding quotes),
+        // so without this the op-version fails activeStationTitles.has(...) and silently
+        // drops out of the matrix — taking the entire station row with it if it's the only
+        // op there.
+        const stripQuotes = (s) => (s ? s.replace(/^"+|"+$/g, '') : '');
+
         // --- Parse operation versions (with parent operation join) ---
         const opVersionsById = {};
         if (opVersionsTable) {
@@ -118,7 +126,7 @@ export function useProductionData() {
                 opVersionsById[r.id] = {
                     id: r.id,
                     name,
-                    station: safeStr(r, FIELDS.OP_VERSION.STATION),
+                    station: stripQuotes(safeStr(r, FIELDS.OP_VERSION.STATION)),
                     sequenceId: safeStr(r, FIELDS.OP_VERSION.SEQUENCE_ID),
                     operationNumber: safeStr(r, FIELDS.OP_VERSION.OPERATION_NUMBER),
                     type: safeStr(r, FIELDS.OP_VERSION.TYPE),
