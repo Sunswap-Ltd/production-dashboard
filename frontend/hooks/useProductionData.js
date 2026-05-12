@@ -425,19 +425,17 @@ export function useProductionData() {
         }
 
         // Map stationTitle -> areaId for the matrix grouping (ids only; full area looked up later).
-        // Also map stationTitle -> lineName via the area's linked line, used by MetricsPanel to
-        // filter andons and defects to the currently selected line. Areas in this base link to a
-        // single line in practice — take the first.
+        // Map stationTitle -> lineName via the Station's own Lines link, used by MetricsPanel to
+        // filter andons and defects to the currently selected line. This bypasses the Areas table
+        // — going through Area.Lines silently drops alerts whenever Production Areas isn't fully
+        // wired into the interface, even though the matrix renders fine (it walks Line → Stations).
         const areaIdByStationTitle = {};
         const lineNameByStationTitle = {};
         for (const station of stations) {
             const a = areaByStationId[station.id];
-            if (a) {
-                areaIdByStationTitle[station.title] = a.id;
-                const firstLineId = a.lineIds[0];
-                const line = firstLineId ? linesById[firstLineId] : null;
-                if (line) lineNameByStationTitle[station.title] = line.name;
-            }
+            if (a) areaIdByStationTitle[station.title] = a.id;
+            const line = station.lineId ? linesById[station.lineId] : null;
+            if (line) lineNameByStationTitle[station.title] = line.name;
         }
         const areaById = {};
         for (const a of areas) areaById[a.id] = a;
