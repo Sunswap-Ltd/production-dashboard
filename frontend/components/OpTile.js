@@ -181,7 +181,9 @@ export default function OpTile({cell, size = 22}) {
                     height: size,
                     borderRadius: 3,
                     border: `3px solid ${borderColour}`,
-                    backgroundColor: cell.opVerPhoto ? COLOURS.motorway : COLOURS.tarmac,
+                    // White base layer under every ASN cell so transparent / letterboxed
+                    // photos read cleanly. Photo → state tint → frame stack on top.
+                    backgroundColor: COLOURS.snow,
                     overflow: 'hidden',
                     flexShrink: 0,
                     boxSizing: 'border-box',
