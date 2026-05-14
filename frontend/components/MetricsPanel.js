@@ -18,7 +18,7 @@ function fmtPct(n, digits = 1) {
 
 // Wide card with a target-vs-actual line chart and a RAG-tinted background.
 function ProductionRateCard({pr}) {
-    if (!pr || !pr.series) {
+    if (!pr) {
         return (
             <div style={{...metrics.card, minWidth: 280}}>
                 <div style={metrics.label}>Production Rate</div>
@@ -27,26 +27,39 @@ function ProductionRateCard({pr}) {
             </div>
         );
     }
+    if (!pr.targetAvailable || !pr.series) {
+        return (
+            <div style={{...metrics.card, minWidth: 280}}>
+                <div style={metrics.label}>Production Rate</div>
+                <div style={{...metrics.value, color: COLOURS.road}}>—</div>
+                <div style={metrics.sub}>no Target KPI for today</div>
+            </div>
+        );
+    }
     const rag = RAG[pr.status] || RAG.amber;
     const series = pr.series;
-    const total = series.productiveMinutesTotal || 1;
+    // Wall-clock X-axis: chart spans shift start → shift end. Breaks render as flat
+    // horizontal segments on the target line (cumPct doesn't advance), so the slope
+    // visibly pauses during lunch / breaks and the eye can read time-of-day directly.
+    const xStart = series.shiftStartMin;
+    const xEnd = series.shiftEndMin;
+    const xRange = Math.max(1, xEnd - xStart);
     const yMax = Math.max(pr.targetPct || 0, pr.actualPct || 0, 1) * 1.1;
-    // Card sized for the 128 px KPI strip with room above for label and below for the legend.
     const w = 420, h = 80;
     const pad = {l: 4, r: 4, t: 4, b: 4};
     const innerW = w - pad.l - pad.r;
     const innerH = h - pad.t - pad.b;
-    const x = (min) => pad.l + (min / total) * innerW;
+    const x = (min) => pad.l + ((min - xStart) / xRange) * innerW;
     const y = (pct) => pad.t + innerH - (pct / yMax) * innerH;
 
-    const actualPath = (series.actualPoints || []).map((p, i) =>
-        `${i === 0 ? 'M' : 'L'}${x(p.productiveMin).toFixed(1)},${y(p.cumPct).toFixed(1)}`
+    const pointsToPath = (pts) => (pts || []).map((p, i) =>
+        `${i === 0 ? 'M' : 'L'}${x(p.wallMin).toFixed(1)},${y(p.cumPct).toFixed(1)}`
     ).join(' ');
-    const targetPath = `M${x(0)},${y(0)} L${x(total)},${y(pr.targetPct)}`;
-    const nowX = x(Math.min(series.productiveMinutesNow || 0, total));
+    const actualPath = pointsToPath(series.actualPoints);
+    const targetPath = pointsToPath(series.targetPoints);
+    const nowX = x(Math.min(Math.max(series.nowWallMin, xStart), xEnd));
 
     const deltaSign = pr.deltaPct >= 0 ? '+' : '−';
-    const isFallback = pr.targetSource !== 'today';
 
     return (
         <div style={{
@@ -55,7 +68,7 @@ function ProductionRateCard({pr}) {
             flex: '0 0 460px',
             padding: '8px 16px',
         }}>
-            <div style={{display: 'flex', alignItems: 'baseline', justifyContent: 'space-between'}}>
+            <div style={{display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexShrink: 0}}>
                 <div style={metrics.label}>Production Rate</div>
                 <div style={{display: 'flex', alignItems: 'baseline', gap: 8}}>
                     <span style={{
@@ -73,7 +86,7 @@ function ProductionRateCard({pr}) {
                     </span>
                 </div>
             </div>
-            <svg width={w} height={h} style={{display: 'block', marginTop: 4}}>
+            <svg width={w} height={h} style={{display: 'block', marginTop: 4, flexShrink: 0}}>
                 <rect x={0} y={0} width={w} height={h} fill={rag.wash} rx={4} />
                 {[0.25, 0.5, 0.75, 1].map(f => (
                     <line key={f}
@@ -85,8 +98,8 @@ function ProductionRateCard({pr}) {
                     d={targetPath}
                     stroke={COLOURS.snow}
                     strokeWidth={1.2}
-                    strokeDasharray={isFallback ? '2,4' : '4,3'}
-                    strokeOpacity={isFallback ? 0.4 : 0.7}
+                    strokeDasharray="4,3"
+                    strokeOpacity={0.7}
                     fill="none"
                 />
                 <path d={actualPath} stroke={COLOURS.snow} strokeWidth={2.2} fill="none" />
@@ -101,8 +114,9 @@ function ProductionRateCard({pr}) {
                 marginTop: 2,
                 display: 'flex',
                 justifyContent: 'space-between',
+                flexShrink: 0,
             }}>
-                <span>{isFallback ? `target estimate${pr.targetSourceDate ? ` (from ${pr.targetSourceDate})` : ''}` : `today's target`}</span>
+                <span>today's target</span>
                 <span>by now {fmtPct(pr.expectedByNowPct, 1)}</span>
             </div>
         </div>
@@ -119,8 +133,24 @@ function PaceCard({pace}) {
             </div>
         );
     }
+    if (!pace.targetAvailable) {
+        return (
+            <div style={metrics.card}>
+                <div style={metrics.label}>Pace</div>
+                <div style={{...metrics.value, color: COLOURS.road}}>—</div>
+                <div style={metrics.sub}>no Target KPI for today</div>
+            </div>
+        );
+    }
     const rag = RAG[pace.status] || RAG.amber;
     const primary = pace.recentPacePctPerHr || pace.actualPacePctPerHr;
+    // On break: pill switches to "on break" (green), regardless of RAG arithmetic.
+    // The big number stays so the floor can still see the trailing 60-min pace.
+    const pillLabel = pace.onBreak
+        ? 'on break'
+        : (pace.status === 'green' ? 'on pace'
+            : pace.status === 'amber' ? 'slow'
+            : 'behind');
     return (
         <div style={metrics.card}>
             <div style={metrics.label}>Pace</div>
@@ -134,9 +164,7 @@ function PaceCard({pace}) {
                     fontSize: 11, fontWeight: 700, color: COLOURS.snow,
                     padding: '2px 6px', borderRadius: 8, backgroundColor: rag.chip,
                 }}>
-                    {pace.status === 'green' ? 'on pace'
-                     : pace.status === 'amber' ? 'slow'
-                     : 'behind'}
+                    {pillLabel}
                 </span>
             </div>
             <div style={metrics.sub}>

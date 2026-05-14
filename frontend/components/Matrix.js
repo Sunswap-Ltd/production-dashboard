@@ -53,6 +53,19 @@ function cleanJobId(jobId, nickname) {
     return jobId;
 }
 
+// "2026-05-13" → "13 May". Parsed manually because the date string has no zone and
+// new Date('YYYY-MM-DD') is parsed as UTC midnight — locale rendering would shift
+// the day in negative-UTC zones.
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function formatScheduleDate(s) {
+    if (!s) return '';
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    if (!m) return s;
+    const mon = MONTH_SHORT[parseInt(m[2], 10) - 1];
+    if (!mon) return s;
+    return `${parseInt(m[3], 10)} ${mon}`;
+}
+
 function SlotColumnHeader({slot}) {
     const progressPct = Math.round((slot.progress || 0) * 100);
     const hasShortLabel = Object.prototype.hasOwnProperty.call(GOODS_STATUS_SHORT, slot.goodsStatus);
@@ -70,6 +83,30 @@ function SlotColumnHeader({slot}) {
             minWidth: 0,
             alignItems: 'stretch',
         }}>
+            {/* End-user / customer logo. Reserve the slot even when missing so column
+                heights stay aligned across the row. Logos vary wildly in aspect (Cranswick
+                ~3.7:1, Bannister ~4.5:1) so object-fit: contain + a fixed box keeps them
+                readable without distortion. */}
+            <div style={{
+                height: 22,
+                marginBottom: 2,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+            }}>
+                {slot.endUserLogoUrl && (
+                    <img
+                        src={slot.endUserLogoUrl}
+                        alt=""
+                        style={{
+                            maxHeight: '100%',
+                            maxWidth: '100%',
+                            objectFit: 'contain',
+                            display: 'block',
+                        }}
+                    />
+                )}
+            </div>
             <div style={{
                 fontWeight: 700,
                 fontSize: 13,
@@ -171,6 +208,25 @@ function SlotColumnHeader({slot}) {
                 }}>
                     {statusLabel}
                 </span>
+            )}
+            {(slot.scheduledStart || slot.scheduledEnd) && (
+                <div
+                    title={`Scheduled ${slot.scheduledStart || '—'} → ${slot.scheduledEnd || '—'}`}
+                    style={{
+                        display: 'flex',
+                        justifyContent: 'center',
+                        gap: 6,
+                        marginTop: 1,
+                        fontSize: 8,
+                        color: COLOURS.road,
+                        fontVariantNumeric: 'tabular-nums',
+                        whiteSpace: 'nowrap',
+                    }}
+                >
+                    <span>{formatScheduleDate(slot.scheduledStart) || '—'}</span>
+                    <span style={{color: COLOURS.tarmac}}>→</span>
+                    <span>{formatScheduleDate(slot.scheduledEnd) || '—'}</span>
+                </div>
             )}
         </div>
     );

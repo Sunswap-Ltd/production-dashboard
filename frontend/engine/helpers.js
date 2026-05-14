@@ -24,13 +24,19 @@ export function safeLink(record, fieldName) {
     }
 }
 
-export function safeAttachment(record, fieldName) {
+export function safeAttachment(record, fieldName, {size = 'small'} = {}) {
     try {
         const v = record.getCellValue(fieldName);
         if (Array.isArray(v) && v.length > 0) {
             const thumb = v[0].thumbnails;
-            if (thumb && thumb.small) return thumb.small.url;
-            if (thumb && thumb.large) return thumb.large.url;
+            // Preferred size first, then the other thumbnail, then the original URL.
+            if (size === 'large') {
+                if (thumb && thumb.large) return thumb.large.url;
+                if (thumb && thumb.small) return thumb.small.url;
+            } else {
+                if (thumb && thumb.small) return thumb.small.url;
+                if (thumb && thumb.large) return thumb.large.url;
+            }
             return v[0].url || null;
         }
         return null;

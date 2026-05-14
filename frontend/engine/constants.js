@@ -64,6 +64,7 @@ export const FIELDS = {
         COMPLETED_STEPS: 'Completed Steps',
         REMAINING_STEPS: 'Remaining Steps',
         ACTUAL_GOODS_COMPLETE: 'Actual Goods Complete Date',
+        END_USER: 'End User', // multipleAttachments — customer logo
     },
     VMR: {
         NAME: 'Name',
@@ -139,8 +140,8 @@ export const FIELDS = {
         LINE_SLOT_ID: 'Line Slot ID',
         BUILD: 'Build',
         ASSEMBLY_LINE: 'Assembly Line',
-        SCHEDULED_START: 'Scheduled Start',
-        SCHEDULED_END: 'Scheduled End',
+        SCHEDULED_START: 'Scheduled Build Start',
+        SCHEDULED_END: 'Scheduled Completion',
     },
     TIMESHEET: {
         START: 'Start',
