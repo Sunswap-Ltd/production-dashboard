@@ -411,9 +411,9 @@ export default function AreaBanners({areaGroups, openDefects, andonAlerts}) {
         defectsByArea[key].push({...d, kind: 'defect', uniqueKey: `defect-${d.id}`});
     }
 
-    const unassignedAndons = andonsByArea.__unassigned || [];
-    const unassignedDefects = defectsByArea.__unassigned || [];
-
+    // Unassigned bucket (defects/andons without a resolvable area) intentionally NOT
+    // rendered — operationally noisy on the wall display. Items with no areaId fall off
+    // the visible banners; they still surface as warning badges on their matrix cells.
     return (
         <div style={{
             display: 'flex',
@@ -435,19 +435,6 @@ export default function AreaBanners({areaGroups, openDefects, andonAlerts}) {
                     scheduleClose={scheduleClose}
                 />
             ))}
-            {(unassignedAndons.length > 0 || unassignedDefects.length > 0) && (
-                <AreaCard
-                    key="area-unassigned"
-                    areaTitle="Unassigned"
-                    areaIndex={null}
-                    andons={unassignedAndons}
-                    defects={unassignedDefects}
-                    hoveredId={hoveredId}
-                    setHoveredId={setHoveredId}
-                    cancelClose={cancelClose}
-                    scheduleClose={scheduleClose}
-                />
-            )}
         </div>
     );
 }

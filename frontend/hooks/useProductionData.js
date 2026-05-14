@@ -1,8 +1,12 @@
 import {useMemo} from 'react';
 import {useBase, useRecords} from '@airtable/blocks/interface/ui';
-import {TABLES, FIELDS, ASN_STATUS, BREAK_TYPE, BREAK_STATUS, GOODS_STATUS, EMPLOYEE_STATUS, CHECKIN_STATUS, DEFECT_STATUS} from '../engine/constants';
-import {safeStr, safeNum, safeLink, safeAttachment, durationToHours} from '../engine/helpers';
-import {computeYamazumi, computeAttendance, computeLineBalance, findBottleneck} from '../engine/calculations';
+import {TABLES, FIELDS, ASN_STATUS, GOODS_STATUS, EMPLOYEE_STATUS, CHECKIN_STATUS, DEFECT_STATUS, KPI_PRODUCTION_RATE_TARGET} from '../engine/constants';
+import {safeStr, safeNum, safeLink, safeAttachment, durationToHours, parsePercentString, isToday} from '../engine/helpers';
+import {
+    computeYamazumi, computeAttendance, computeLineBalance, findBottleneck,
+    parseShiftSettings, productiveMinutesPerShift, elapsedProductiveMinutes,
+    expectedBuildPctByNow, productionRateStatus, paceStatus,
+} from '../engine/calculations';
 
 function getTable(base, name) {
     return base.getTableByNameIfExists(name);
@@ -16,7 +20,6 @@ export function useProductionData() {
     const base = useBase();
 
     const sessionsTable = getTable(base, TABLES.ASSEMBLY_SESSIONS);
-    const breaksTable = getTable(base, TABLES.PRODUCTION_BREAKS);
     const buildsTable = getTable(base, TABLES.BUILDS);
     const vmrTable = getTable(base, TABLES.VARIANT_MFG_RELEASE);
     const vconfigTable = getTable(base, TABLES.VARIANT_CONFIG);
@@ -30,10 +33,11 @@ export function useProductionData() {
     const timesheetsTable = getTable(base, TABLES.TIMESHEETS);
     const settingsTable = getTable(base, TABLES.SETTINGS);
     const defectsTable = getTable(base, TABLES.DEFECTS);
+    const sessionStepsTable = getTable(base, TABLES.SESSION_STEPS);
+    const kpiRecordsTable = getTable(base, TABLES.KPI_RECORDS);
 
     const fallback = base.tables[0];
     const sessionRecords = useRecords(sessionsTable || fallback);
-    const breakRecords = useRecords(breaksTable || fallback);
     const buildRecords = useRecords(buildsTable || fallback);
     const vmrRecords = useRecords(vmrTable || fallback);
     const vconfigRecords = useRecords(vconfigTable || fallback);
@@ -47,6 +51,8 @@ export function useProductionData() {
     const timesheetRecords = useRecords(timesheetsTable || fallback);
     const settingsRecords = useRecords(settingsTable || fallback);
     const defectRecords = useRecords(defectsTable || fallback);
+    const sessionStepRecords = useRecords(sessionStepsTable || fallback);
+    const kpiRecords = useRecords(kpiRecordsTable || fallback);
 
     return useMemo(() => {
         const requiredTables = [
@@ -107,6 +113,14 @@ export function useProductionData() {
             return m ? `v${m[1]}` : '';
         };
 
+        // Strip surrounding double-quote characters from a string. Some op-version records
+        // have a Station value typed with literal `"` chars at both ends (data-entry typo).
+        // The active-stations Set is keyed by the raw station title (no surrounding quotes),
+        // so without this the op-version fails activeStationTitles.has(...) and silently
+        // drops out of the matrix — taking the entire station row with it if it's the only
+        // op there.
+        const stripQuotes = (s) => (s ? s.replace(/^"+|"+$/g, '') : '');
+
         // --- Parse operation versions (with parent operation join) ---
         const opVersionsById = {};
         if (opVersionsTable) {
@@ -120,7 +134,7 @@ export function useProductionData() {
                 opVersionsById[r.id] = {
                     id: r.id,
                     name,
-                    station: safeStr(r, FIELDS.OP_VERSION.STATION),
+                    station: stripQuotes(safeStr(r, FIELDS.OP_VERSION.STATION)),
                     sequenceId: safeStr(r, FIELDS.OP_VERSION.SEQUENCE_ID),
                     operationNumber: safeStr(r, FIELDS.OP_VERSION.OPERATION_NUMBER),
                     type: safeStr(r, FIELDS.OP_VERSION.TYPE),
@@ -175,6 +189,8 @@ export function useProductionData() {
                     vmrName: vmrLinks.length > 0 ? vmrLinks[0].name : '',
                     opVersionId: opLinks.length > 0 ? opLinks[0].id : null,
                     repeats: safeNum(r, FIELDS.VCONFIG.REPEATS, 1),
+                    percentageOfVariant: safeNum(r, FIELDS.VCONFIG.PERCENTAGE_OF_VARIANT, 0),
+                    cycleTimeHours: safeNum(r, FIELDS.VCONFIG.CYCLE_TIME_HOURS, 0),
                 });
             }
         }
@@ -188,33 +204,6 @@ export function useProductionData() {
             }
         }
 
-        // --- Parse breaks ---
-        const breaksBySessionId = {};
-        const activeAndons = [];
-        if (breaksTable) {
-            for (const r of breakRecords) {
-                const sessionLinks = safeLink(r, FIELDS.BREAK.ASSEMBLY_SESSION);
-                const breakType = safeStr(r, FIELDS.BREAK.BREAK_TYPE);
-                const status = safeStr(r, FIELDS.BREAK.STATUS);
-                const cause = safeStr(r, FIELDS.BREAK.CAUSE);
-                const start = safeStr(r, FIELDS.BREAK.START);
-
-                for (const link of sessionLinks) {
-                    if (!breaksBySessionId[link.id]) breaksBySessionId[link.id] = [];
-                    breaksBySessionId[link.id].push({breakType, status, cause, start});
-                }
-
-                if (breakType === BREAK_TYPE.ANDON && status === BREAK_STATUS.IN_PROGRESS) {
-                    activeAndons.push({
-                        id: r.id,
-                        cause,
-                        start,
-                        sessionIds: sessionLinks.map(l => l.id),
-                    });
-                }
-            }
-        }
-
         // --- Parse assembly sessions ---
         const allSessions = [];
         const activeSessionsByStation = {};
@@ -222,6 +211,7 @@ export function useProductionData() {
         const completedSessionsByStation = {};
 
         for (const r of sessionRecords) {
+            const asnId = safeStr(r, FIELDS.ASN.ASSEMBLY_SESSION_ID);
             const status = safeStr(r, FIELDS.ASN.STATUS);
             const station = safeStr(r, FIELDS.ASN.STATION);
             const progress = safeNum(r, FIELDS.ASN.PROGRESS, 0);
@@ -248,22 +238,20 @@ export function useProductionData() {
             const buildId = buildLinks.length > 0 ? buildLinks[0].id : null;
             const buildName = buildLinks.length > 0 ? buildLinks[0].name : '';
 
-            const sessionBreaks = breaksBySessionId[r.id] || [];
-            const hasActiveAndon = sessionBreaks.some(
-                b => b.breakType === BREAK_TYPE.ANDON && b.status === BREAK_STATUS.IN_PROGRESS
-            );
-            const andonCause = hasActiveAndon
-                ? (sessionBreaks.find(b => b.breakType === BREAK_TYPE.ANDON && b.status === BREAK_STATUS.IN_PROGRESS) || {}).cause
-                : null;
-            const andonStart = hasActiveAndon
-                ? (sessionBreaks.find(b => b.breakType === BREAK_TYPE.ANDON && b.status === BREAK_STATUS.IN_PROGRESS) || {}).start
-                : null;
+            // Andon state comes from the session's own fields, not Production Breaks. A session
+            // is in andon when Status=Paused AND the Andon Flag lookup contains "Andon". Production
+            // Breaks records are unreliable (often left "In Progress" after the session moves on).
+            const andonFlag = safeStr(r, FIELDS.ASN.ANDON_FLAG);
+            const hasActiveAndon = status === ASN_STATUS.PAUSED && andonFlag.includes('Andon');
+            const andonCause = hasActiveAndon ? safeStr(r, FIELDS.ASN.ANDON_CAUSE) : null;
+            const andonStart = null;
 
             const actualTimeHrs = actualTime / 3600;
             const productionRatePct = actualTimeHrs > 0 ? (progress * 100) / actualTimeHrs : 0;
 
             const session = {
                 id: r.id,
+                asnId,
                 status,
                 station,
                 progress,
@@ -425,10 +413,17 @@ export function useProductionData() {
         }
 
         // Map stationTitle -> areaId for the matrix grouping (ids only; full area looked up later).
+        // Map stationTitle -> lineName via the Station's own Lines link, used by MetricsPanel to
+        // filter andons and defects to the currently selected line. This bypasses the Areas table
+        // — going through Area.Lines silently drops alerts whenever Production Areas isn't fully
+        // wired into the interface, even though the matrix renders fine (it walks Line → Stations).
         const areaIdByStationTitle = {};
+        const lineNameByStationTitle = {};
         for (const station of stations) {
             const a = areaByStationId[station.id];
             if (a) areaIdByStationTitle[station.title] = a.id;
+            const line = station.lineId ? linesById[station.lineId] : null;
+            if (line) lineNameByStationTitle[station.title] = line.name;
         }
         const areaById = {};
         for (const a of areas) areaById[a.id] = a;
@@ -554,6 +549,7 @@ export function useProductionData() {
                         s => s.status === ASN_STATUS.IN_PROGRESS || s.status === ASN_STATUS.PAUSED
                     );
                     const pausedSessions = liveSessions.filter(s => s.status === ASN_STATUS.PAUSED);
+                    const scheduledSessions = opSessions.filter(s => s.status === ASN_STATUS.SCHEDULED);
                     const andonSessions = liveSessions.filter(s => s.hasAndon);
                     const andonUnknownSessions = andonSessions.filter(s => isUnknownCause(s.andonCause));
 
@@ -580,12 +576,17 @@ export function useProductionData() {
                         .map(s => (s.assemblyTimeHrs || 0) * 3600)
                         .filter(sec => sec > 0);
 
+                    const asnEntriesForOp = opSessions
+                        .filter(s => s.asnId)
+                        .map(s => ({asnId: s.asnId, start: s.start || ''}));
+
                     if (existingCell) {
                         // Multiple op-versions of the same operation for this slot — aggregate.
                         existingCell.needed += repeats;
                         existingCell.completed += Math.min(completedCount, repeats);
                         existingCell.live += liveSessions.length;
                         existingCell.paused += pausedSessions.length;
+                        existingCell.scheduled += scheduledSessions.length;
                         existingCell.andon += andonSessions.length;
                         existingCell.andonUnknown = existingCell.andonUnknown || andonUnknownSessions.length > 0;
                         if (!existingCell.liveSession && liveSessions.length > 0) existingCell.liveSession = liveSessions[0];
@@ -593,6 +594,7 @@ export function useProductionData() {
                         existingCell._completedMinutesSum += completedMinutesSum;
                         existingCell._completedSessionCount += completedSessions.length;
                         for (const sec of completedSecondsList) existingCell._completedSecondsList.push(sec);
+                        for (const e of asnEntriesForOp) existingCell._asnEntries.push(e);
                         for (const s of liveSessions) {
                             if (s.techName && !existingCell.liveOperators.find(o => o.name === s.techName)) {
                                 existingCell.liveOperators.push({name: s.techName, picture: s.techPicture});
@@ -622,6 +624,7 @@ export function useProductionData() {
                             completed: completedCount,
                             live: liveSessions.length,
                             paused: pausedSessions.length,
+                            scheduled: scheduledSessions.length,
                             andon: andonSessions.length,
                             andonUnknown: andonUnknownSessions.length > 0,
                             liveOperators,
@@ -630,6 +633,7 @@ export function useProductionData() {
                             _completedMinutesSum: completedMinutesSum,
                             _completedSessionCount: completedSessions.length,
                             _completedSecondsList: completedSecondsList.slice(),
+                            _asnEntries: asnEntriesForOp.slice(),
                             versionLabels: opVer.versionLabel ? [opVer.versionLabel] : [],
                             state: 'pending', // recomputed below
                         };
@@ -637,15 +641,16 @@ export function useProductionData() {
                 }
 
                 // Final state + completionFraction pass per cell (after possible aggregation across versions).
+                // Most-active-wins priority: Andon > In Progress > Paused > Completed > Scheduled > Pending.
+                // Matches the user-facing Airtable status palette on Assembly Sessions.
                 for (const key of Object.keys(cellMap)) {
                     const c = cellMap[key];
                     let state = 'pending';
                     if (c.andon > 0) state = 'andon';
                     else if (c.live > c.paused) state = 'live';
                     else if (c.paused > 0) state = 'paused';
-                    else if (c.completed >= c.needed && c.needed > 0) state = 'completed';
-                    else if (c.completed > 0) state = 'partial';
-                    if (isCompleted) state = 'completed';
+                    else if (c.completed > 0 || isCompleted) state = 'completed';
+                    else if ((c.scheduled || 0) > 0) state = 'scheduled';
                     c.state = state;
 
                     // completionFraction = (completed repeats + avg live progress for in-flight repeats) / needed
@@ -663,9 +668,25 @@ export function useProductionData() {
                         ? c._completedMinutesSum / c._completedSessionCount
                         : 0;
 
+                    // Latest ASN on the cell (by session start, desc) for the top-centre badge.
+                    // Drops any duplicate ASN strings across op-versions so the +N counter is
+                    // truthful. Empty when the cell has no sessions with an ID.
+                    const dedup = new Map();
+                    for (const e of c._asnEntries || []) {
+                        if (!dedup.has(e.asnId) || (e.start || '') > (dedup.get(e.asnId).start || '')) {
+                            dedup.set(e.asnId, e);
+                        }
+                    }
+                    const sortedAsns = [...dedup.values()].sort(
+                        (a, b) => (b.start || '').localeCompare(a.start || ''),
+                    );
+                    c.latestAsnId = sortedAsns[0] ? sortedAsns[0].asnId : '';
+                    c.extraAsnCount = Math.max(0, sortedAsns.length - 1);
+
                     delete c._liveProgressBag;
                     delete c._completedMinutesSum;
                     delete c._completedSessionCount;
+                    delete c._asnEntries;
                 }
 
                 // ---- Orphan-cell pass: ASNs at parent operations NOT in this build's VMR ----
@@ -692,6 +713,7 @@ export function useProductionData() {
                         s => s.status === ASN_STATUS.IN_PROGRESS || s.status === ASN_STATUS.PAUSED
                     );
                     const pausedSessions = liveSessions.filter(s => s.status === ASN_STATUS.PAUSED);
+                    const scheduledSessions = orphan.sessions.filter(s => s.status === ASN_STATUS.SCHEDULED);
                     const andonSessions = liveSessions.filter(s => s.hasAndon);
                     const andonUnknownSessions = andonSessions.filter(s => isUnknownCause(s.andonCause));
 
@@ -707,14 +729,15 @@ export function useProductionData() {
                         .map(id => opVersionsById[id]?.versionLabel)
                         .filter(Boolean);
 
+                    // Same most-active-wins priority as the main cell loop.
                     let state = 'pending';
                     const completedCount = completedSessions.length;
                     const needed = orphan.sessions.length;
                     if (andonSessions.length > 0) state = 'andon';
                     else if (liveSessions.length > pausedSessions.length) state = 'live';
                     else if (pausedSessions.length > 0) state = 'paused';
-                    else if (completedCount >= needed && needed > 0) state = 'completed';
-                    else if (completedCount > 0) state = 'partial';
+                    else if (completedCount > 0) state = 'completed';
+                    else if (scheduledSessions.length > 0) state = 'scheduled';
 
                     const liveBag = liveSessions.map(s => s.progress || 0);
                     const avgLiveProgress = liveBag.length > 0
@@ -726,6 +749,19 @@ export function useProductionData() {
                     const orphanCompletedSecondsList = completedSessions
                         .map(s => (s.assemblyTimeHrs || 0) * 3600)
                         .filter(sec => sec > 0);
+
+                    const orphanAsnEntries = orphan.sessions
+                        .filter(s => s.asnId)
+                        .map(s => ({asnId: s.asnId, start: s.start || ''}));
+                    const orphanDedup = new Map();
+                    for (const e of orphanAsnEntries) {
+                        if (!orphanDedup.has(e.asnId) || (e.start || '') > (orphanDedup.get(e.asnId).start || '')) {
+                            orphanDedup.set(e.asnId, e);
+                        }
+                    }
+                    const orphanSortedAsns = [...orphanDedup.values()].sort(
+                        (a, b) => (b.start || '').localeCompare(a.start || ''),
+                    );
 
                     cellMap[key] = {
                         slotId,
@@ -740,6 +776,7 @@ export function useProductionData() {
                         completed: completedCount,
                         live: liveSessions.length,
                         paused: pausedSessions.length,
+                        scheduled: scheduledSessions.length,
                         andon: andonSessions.length,
                         andonUnknown: andonUnknownSessions.length > 0,
                         liveOperators,
@@ -751,6 +788,8 @@ export function useProductionData() {
                         completionMinutes: completedSessions.length > 0
                             ? completedMinutesSum / completedSessions.length
                             : 0,
+                        latestAsnId: orphanSortedAsns[0] ? orphanSortedAsns[0].asnId : '',
+                        extraAsnCount: Math.max(0, orphanSortedAsns.length - 1),
                     };
 
                     // Make sure the column exists so the orphan cell can render.
@@ -1025,6 +1064,256 @@ export function useProductionData() {
             return an.localeCompare(bn);
         });
 
+        // --- Production rate (cumulative vs target) + Pace + per-station rates ---
+        // Shift config comes from the Settings table records already loaded above.
+        const shiftConfig = parseShiftSettings((settingsTable ? settingsRecords : []).map(r => ({
+            variable: safeStr(r, FIELDS.SETTING.VARIABLE),
+            value: safeStr(r, FIELDS.SETTING.VALUE),
+        })));
+        const productiveMinutesTotal = productiveMinutesPerShift(shiftConfig);
+        const now = new Date();
+        const productiveMinutesElapsed = elapsedProductiveMinutes(shiftConfig, now);
+
+        // Daily target from KPI Records (KPI-376 for today). Fall back to most-recent prior
+        // log, else a sensible default. Surface the fallback state so the UI can flag it.
+        let dailyTargetPct = 100;
+        let targetSource = 'fallback';
+        let targetSourceDate = null;
+        if (kpiRecordsTable) {
+            const candidates = [];
+            for (const r of kpiRecords) {
+                const kpi = safeStr(r, FIELDS.KPI_RECORD.KPI);
+                if (kpi !== KPI_PRODUCTION_RATE_TARGET) continue;
+                const dateStr = safeStr(r, FIELDS.KPI_RECORD.DATE);
+                const metric = safeNum(r, FIELDS.KPI_RECORD.METRIC, NaN);
+                if (!Number.isFinite(metric)) continue;
+                candidates.push({dateStr, metric});
+            }
+            const todayMatch = candidates.find(c => isToday(c.dateStr));
+            // Airtable percent fields return a fraction (0..1); other numeric fields may already
+            // be in percent. Treat values <= 1 as fractions, else as already-in-percent.
+            const toPct = (m) => (m > 1 ? m : m * 100);
+            if (todayMatch) {
+                dailyTargetPct = toPct(todayMatch.metric);
+                targetSource = 'today';
+                targetSourceDate = todayMatch.dateStr;
+            } else if (candidates.length > 0) {
+                candidates.sort((a, b) => (b.dateStr || '').localeCompare(a.dateStr || ''));
+                const latest = candidates[0];
+                dailyTargetPct = toPct(latest.metric);
+                targetSource = 'previous';
+                targetSourceDate = latest.dateStr;
+            }
+        }
+
+        const expectedByNowPct = expectedBuildPctByNow(
+            dailyTargetPct, productiveMinutesTotal, productiveMinutesElapsed,
+        );
+
+        // Per-line set of build ids in view + the most-recent-in-progress slot's VMR (used as
+        // anchor for per-station share — same anchor the matrix already uses for `repeatsLatest`).
+        const lineBuildIdsByLineId = {};
+        const lineVmrByLineId = {};
+        for (const lineId of Object.keys(slotsByLineId)) {
+            const slots = slotsByLineId[lineId] || [];
+            const set = new Set();
+            let latest = null;
+            for (const sl of slots) {
+                if (sl.buildId) set.add(sl.buildId);
+                if (sl.isAssembling && (!latest || (sl.slotNum || 0) > (latest.slotNum || 0))) {
+                    latest = sl;
+                }
+            }
+            lineBuildIdsByLineId[lineId] = set;
+            lineVmrByLineId[lineId] = latest ? latest.variantMfgRelease : null;
+        }
+
+        // Map ASN record-id → {buildId, station} from the already-parsed sessions, so a Session
+        // Step (linked to its parent ASN by record id) can be projected onto a line + station.
+        const asnMeta = {};
+        for (const s of allSessions) {
+            asnMeta[s.id] = {buildId: s.buildId, station: s.station};
+        }
+
+        // Per-line buckets of completed steps for the day, plus a global latest-step-time per
+        // ASN that the Matrix uses to fire its burst animation when a step ticks over.
+        const stepsTodayByLineId = {};
+        const latestStepCompleteByAsn = {};
+        const todayStart = new Date(now);
+        todayStart.setHours(0, 0, 0, 0);
+        const todayMs = todayStart.getTime();
+
+        if (sessionStepsTable) {
+            for (const r of sessionStepRecords) {
+                const asnLinks = safeLink(r, FIELDS.STEP.ASN);
+                if (asnLinks.length === 0) continue;
+                const asnRecordId = asnLinks[0].id;
+                const meta = asnMeta[asnRecordId];
+                if (!meta || !meta.buildId) continue;
+
+                let status = false;
+                try { status = !!r.getCellValue(FIELDS.STEP.STATUS); } catch { /* */ }
+                if (!status) continue;
+
+                const completeStr = safeStr(r, FIELDS.STEP.COMPLETE_TIME);
+                if (!completeStr) continue;
+                const completeMs = new Date(completeStr).getTime();
+                if (!Number.isFinite(completeMs)) continue;
+
+                // Track latest step completion per ASN (record id) for the burst animation.
+                if (!latestStepCompleteByAsn[asnRecordId] || completeStr > latestStepCompleteByAsn[asnRecordId]) {
+                    latestStepCompleteByAsn[asnRecordId] = completeStr;
+                }
+
+                if (completeMs < todayMs) continue;
+
+                let lineIdForStep = null;
+                for (const lineId of Object.keys(lineBuildIdsByLineId)) {
+                    if (lineBuildIdsByLineId[lineId].has(meta.buildId)) {
+                        lineIdForStep = lineId;
+                        break;
+                    }
+                }
+                if (!lineIdForStep) continue;
+
+                const pctRaw = safeStr(r, FIELDS.STEP.BUILD_PCT_PER_STEP);
+                const pct = parsePercentString(pctRaw);
+                if (!(pct > 0)) continue;
+
+                const stepDate = new Date(completeMs);
+                const productiveMin = elapsedProductiveMinutes(shiftConfig, stepDate);
+
+                if (!stepsTodayByLineId[lineIdForStep]) stepsTodayByLineId[lineIdForStep] = [];
+                stepsTodayByLineId[lineIdForStep].push({
+                    productiveMin,
+                    pct,
+                    station: meta.station || '',
+                    asnRecordId,
+                    completeMs,
+                });
+            }
+        }
+
+        // Station share of a build = Σ VMR-OV.PercentageOfVariant for ops at this station.
+        // Returned in percent points (e.g. 18.4 means 18.4% of a build).
+        const stationShareForVmr = (vmrName) => {
+            if (!vmrName) return {};
+            const share = {};
+            for (const vc of variantConfigs) {
+                if (vc.vmrName !== vmrName) continue;
+                const opVer = opVersionsById[vc.opVersionId];
+                if (!opVer || !opVer.station) continue;
+                const pct = vc.percentageOfVariant > 1
+                    ? vc.percentageOfVariant
+                    : vc.percentageOfVariant * 100;
+                share[opVer.station] = (share[opVer.station] || 0) + pct;
+            }
+            return share;
+        };
+
+        const productionRateByLineId = {};
+        const paceByLineId = {};
+        const stationRatesByLineId = {};
+
+        const BUCKET_MIN = 5;
+
+        for (const lineId of Object.keys(slotsByLineId)) {
+            const steps = (stepsTodayByLineId[lineId] || []).slice().sort(
+                (a, b) => a.completeMs - b.completeMs,
+            );
+
+            const actualPct = steps.reduce((acc, s) => acc + s.pct, 0);
+
+            // 5-min bucketed cumulative actual series up to "now" for the line graph.
+            const actualPoints = [{productiveMin: 0, cumPct: 0}];
+            let running = 0;
+            let nextEdge = BUCKET_MIN;
+            for (const st of steps) {
+                while (st.productiveMin > nextEdge && nextEdge <= productiveMinutesTotal) {
+                    actualPoints.push({productiveMin: nextEdge, cumPct: running});
+                    nextEdge += BUCKET_MIN;
+                }
+                running += st.pct;
+            }
+            const cutoff = Math.min(productiveMinutesElapsed, productiveMinutesTotal);
+            actualPoints.push({productiveMin: cutoff, cumPct: running});
+
+            const deltaPct = actualPct - expectedByNowPct;
+            const status = productionRateStatus(actualPct, expectedByNowPct);
+
+            productionRateByLineId[lineId] = {
+                actualPct,
+                targetPct: dailyTargetPct,
+                expectedByNowPct,
+                deltaPct,
+                status,
+                targetSource,
+                targetSourceDate,
+                productiveMinutesElapsed,
+                productiveMinutesTotal,
+                series: {
+                    productiveMinutesTotal,
+                    productiveMinutesNow: cutoff,
+                    actualPoints,
+                    targetPoints: [
+                        {productiveMin: 0, cumPct: 0},
+                        {productiveMin: productiveMinutesTotal, cumPct: dailyTargetPct},
+                    ],
+                },
+            };
+
+            // Pace: shift-average so far + rolling last-60-productive-minute pace.
+            const productiveHoursElapsed = productiveMinutesElapsed / 60;
+            const productiveHoursTotal = productiveMinutesTotal / 60;
+            const actualPacePctPerHr = productiveHoursElapsed > 0
+                ? actualPct / productiveHoursElapsed
+                : 0;
+            const targetPacePctPerHr = productiveHoursTotal > 0
+                ? dailyTargetPct / productiveHoursTotal
+                : 0;
+            const recentCutoffMin = Math.max(0, productiveMinutesElapsed - 60);
+            const recentSum = steps
+                .filter(s => s.productiveMin >= recentCutoffMin && s.productiveMin <= productiveMinutesElapsed)
+                .reduce((a, s) => a + s.pct, 0);
+            const recentWindowHrs = Math.min(60, productiveMinutesElapsed) / 60;
+            const recentPacePctPerHr = recentWindowHrs > 0 ? recentSum / recentWindowHrs : 0;
+
+            paceByLineId[lineId] = {
+                actualPacePctPerHr,
+                recentPacePctPerHr,
+                targetPacePctPerHr,
+                status: paceStatus(recentPacePctPerHr || actualPacePctPerHr, targetPacePctPerHr),
+            };
+
+            // Per-station rate vs station's share of the day's target.
+            const anchorVmr = lineVmrByLineId[lineId];
+            const shareByStation = stationShareForVmr(anchorVmr);
+            const stationActual = {};
+            for (const st of steps) {
+                if (!st.station) continue;
+                stationActual[st.station] = (stationActual[st.station] || 0) + st.pct;
+            }
+            const stationRates = {};
+            for (const stationTitle of Object.keys(shareByStation)) {
+                const share = shareByStation[stationTitle];
+                if (!(share > 0)) continue;
+                const dailyTargetForStation = dailyTargetPct * share / 100;
+                const expected = expectedBuildPctByNow(
+                    dailyTargetForStation, productiveMinutesTotal, productiveMinutesElapsed,
+                );
+                const actualForStation = stationActual[stationTitle] || 0;
+                stationRates[stationTitle] = {
+                    share,
+                    dailyTarget: dailyTargetForStation,
+                    expectedByNow: expected,
+                    actualToday: actualForStation,
+                    delta: actualForStation - expected,
+                    status: productionRateStatus(actualForStation, expected),
+                };
+            }
+            stationRatesByLineId[lineId] = stationRates;
+        }
+
         // --- Compute metrics ---
         const stationCycleTimes = {};
         for (const s of stations) {
@@ -1068,29 +1357,30 @@ export function useProductionData() {
             : teamMembers;
         const attendance = computeAttendance(directAssemblyTeam);
 
-        // --- Andon alerts (now with areaId so AreaBanners can bucket per area) ---
+        // --- Andon alerts: one entry per Assembly Session currently flagged as andon ---
+        // Source-of-truth is the session itself (Status=Paused + Andon Flag=Andon), not the
+        // Production Breaks table. AreaBanners + the Andons KPI card consume this list.
         const andonAlerts = [];
-        for (const andon of activeAndons) {
-            for (const sessionId of andon.sessionIds) {
-                const session = allSessions.find(s => s.id === sessionId);
-                if (!session) continue;
-                const sessionOpVer = session.opVerId ? opVersionsById[session.opVerId] : null;
-                andonAlerts.push({
-                    id: andon.id,
-                    station: session.station,
-                    cause: andon.cause,
-                    start: andon.start,
-                    buildName: session.buildName,
-                    techName: session.techName,
-                    techPicture: session.techPicture,
-                    areaId: areaIdByStationTitle[session.station] || null,
-                    opVerName: sessionOpVer ? sessionOpVer.name : '',
-                    opVerPhoto: sessionOpVer ? sessionOpVer.photo : null,
-                    // AreaBanners.Thumb reads `thumbnail` — for andons it's the op-version
-                    // photo, falling back to the operator's profile picture.
-                    thumbnail: (sessionOpVer && sessionOpVer.photo) || session.techPicture || null,
-                });
-            }
+        for (const session of allSessions) {
+            if (!session.hasAndon) continue;
+            const sessionOpVer = session.opVerId ? opVersionsById[session.opVerId] : null;
+            andonAlerts.push({
+                id: session.id,
+                station: session.station,
+                cause: session.andonCause,
+                start: session.andonStart,
+                buildName: session.buildName,
+                techName: session.techName,
+                techPicture: session.techPicture,
+                areaId: areaIdByStationTitle[session.station] || null,
+                lineName: lineNameByStationTitle[session.station] || null,
+                opVerId: session.opVerId || null,
+                opVerName: sessionOpVer ? sessionOpVer.name : '',
+                opVerPhoto: sessionOpVer ? sessionOpVer.photo : null,
+                // AreaBanners.Thumb reads `thumbnail` — for andons it's the op-version
+                // photo, falling back to the operator's profile picture.
+                thumbnail: (sessionOpVer && sessionOpVer.photo) || session.techPicture || null,
+            });
         }
 
         // --- Open defects, grouped per area via the Op Version → Station → Area lookup ----
@@ -1124,6 +1414,7 @@ export function useProductionData() {
                     opVerName,
                     station,
                     areaId,
+                    lineName: station ? (lineNameByStationTitle[station] || null) : null,
                     buildJobId: build ? build.buildId : '',
                     buildNickname: build ? build.nickname : '',
                     thumbnail,
@@ -1167,15 +1458,23 @@ export function useProductionData() {
                 bottleneckStation,
                 avgProductionRate: Math.round(avgProductionRate * 10) / 10,
                 attendance,
+                productionRateByLineId,
+                paceByLineId,
+                stationRatesByLineId,
+                shiftConfig,
+                productiveMinutesElapsed,
+                productiveMinutesTotal,
             },
+            latestStepCompleteByAsn,
             settings,
             settingsTable, // exposed so the popover can call updateRecordAsync
             openDefects,
             isLoading: false,
         };
     }, [
-        sessionRecords, breakRecords, buildRecords, vmrRecords, vconfigRecords,
+        sessionRecords, buildRecords, vmrRecords, vconfigRecords,
         stationRecords, lineRecords, areaRecords, opVersionRecords, teamRecords,
         buildSlotRecords, timesheetRecords, settingsRecords, defectRecords,
+        sessionStepRecords, kpiRecords,
     ]);
 }

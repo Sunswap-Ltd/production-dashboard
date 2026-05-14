@@ -2,6 +2,40 @@ import React, {useState, useRef, useCallback, useEffect} from 'react';
 import ReactDOM from 'react-dom';
 import {COLOURS, STATE_COLOURS} from '../styles';
 
+// Per-state photo tint at 30 % opacity. Mirrors STATE_COLOURS but pre-baked as rgba so we
+// can layer a translucent wash over the op-version photo without recomputing on each render.
+const STATE_TINTS = {
+    completed: 'rgba(21, 128, 61, 0.70)',   // #15803D
+    live:      'rgba(74, 222, 128, 0.30)',  // #4ADE80
+    paused:    'rgba(245, 158, 11, 0.30)',  // #F59E0B
+    andon:     'rgba(239, 68, 68, 0.30)',   // #ef4444
+    scheduled: 'rgba(59, 130, 246, 0.30)',  // #3B82F6
+    pending:   'rgba(155, 155, 155, 0.20)', // Road #9b9b9b — subtle grey wash
+};
+
+// Generic image-not-available glyph rendered when an op-version has no photo. Inline SVG
+// (no extra asset file), Road-grey on Frost — matches the brand palette and reads at 38 px.
+function PhotoPlaceholder() {
+    return (
+        <svg
+            viewBox="0 0 24 24"
+            width="100%"
+            height="100%"
+            preserveAspectRatio="xMidYMid meet"
+            style={{display: 'block', background: '#e6e2db'}}
+            aria-hidden="true"
+        >
+            {/* rounded frame */}
+            <rect x="3" y="4.5" width="18" height="15" rx="1.8" ry="1.8"
+                  fill="none" stroke="#9b9b9b" strokeWidth="1.6" />
+            {/* sun */}
+            <circle cx="15.5" cy="9.5" r="1.6" fill="#9b9b9b" />
+            {/* mountains */}
+            <path d="M4.5 18 L10 11.5 L13.5 15 L15.5 13 L19.5 18 Z" fill="#9b9b9b" />
+        </svg>
+    );
+}
+
 const STATE_LABEL = {
     completed: '✓ done',
     partial: '◐ partial',
@@ -80,7 +114,12 @@ function Popover({cell, anchor, onEnter, onLeave}) {
     );
 }
 
-export default function OpTile({cell, size = 22}) {
+export default function OpTile({cell, size = 22, width, burst = false}) {
+    const tileWidth = width || size;
+    const tileHeight = size;
+    // Pie + corner badges sized off the shorter dimension so they stay square + circular
+    // even when the tile is rectangular (wider than tall).
+    const inner = Math.min(tileWidth, tileHeight);
     const ref = useRef(null);
     const [hovered, setHovered] = useState(null);
     const closeTimer = useRef(null);
@@ -115,8 +154,8 @@ export default function OpTile({cell, size = 22}) {
                 onMouseEnter={handleEnter}
                 onMouseLeave={scheduleClose}
                 style={{
-                    width: size,
-                    height: size,
+                    width: tileWidth,
+                    height: tileHeight,
                     borderRadius: 3,
                     border: `1px dashed ${COLOURS.tarmac}`,
                     background: 'transparent',
@@ -127,12 +166,16 @@ export default function OpTile({cell, size = 22}) {
         );
     }
 
-    const borderColour = STATE_COLOURS[state] || COLOURS.tarmac;
-    const isLive = state === 'live' || state === 'paused' || state === 'andon';
+    // Pending cells get a thin 2 px grey wire frame (no tint) — present but understated, so
+    // the photo reads clearly and pending cells sit visually below the 3 px coloured frames.
+    const isPending = state === 'pending';
+    const borderColour = isPending ? COLOURS.road : (STATE_COLOURS[state] || COLOURS.tarmac);
+    const borderWidth = isPending ? 2 : 3;
     const isAllDone = state === 'completed';
-    const isPartial = state === 'partial';
-    const showPie = (isLive || isPartial) && !isAllDone;
     const piePct = Math.round((cell.completionFraction || 0) * 100);
+    // Pie shows progress for any cell with partial completion (regardless of state), except
+    // andon — andon already pulses red, so an in-cell pie would just compete for attention.
+    const showPie = piePct > 0 && piePct < 100 && state !== 'andon';
 
     // Format completion minutes for the bottom-right badge: "12m" up to 99m, "1h32" beyond.
     const formatMinutes = (mins) => {
@@ -143,16 +186,26 @@ export default function OpTile({cell, size = 22}) {
         const m = total % 60;
         return m === 0 ? `${h}h` : `${h}h${m}`;
     };
-    const minuteLabel = isAllDone ? formatMinutes(cell.completionMinutes) : '';
-    const pieColour = state === 'paused' ? COLOURS.amber
-        : state === 'andon' ? COLOURS.red
-        : state === 'live' ? COLOURS.sol
-        : COLOURS.green; // partial
+    // Show minute badge on any cell with a known completion time (median across done repeats),
+    // not just fully-done cells — partial completions still benefit from showing avg minutes.
+    const minuteLabel = (state === 'completed' || cell.completionMinutes > 0)
+        ? formatMinutes(cell.completionMinutes) : '';
+    // Pie colour mirrors the frame: pies inherit the cell's status palette so the cell reads
+    // as one coherent piece (light-green pie on a light-green frame for live, etc.).
+    const pieColour = STATE_COLOURS[state] || COLOURS.green;
     const firstOperator = cell.liveOperators && cell.liveOperators.length > 0 ? cell.liveOperators[0] : null;
     const extraOperators = cell.liveOperators ? Math.max(0, cell.liveOperators.length - 1) : 0;
-    const headshotSize = Math.max(13, Math.round(size * 0.42));
+    const headshotSize = Math.max(13, Math.round(inner * 0.5));
     const hasWarning = cell.warning && cell.warning.length > 0;
-    const warningBadgeSize = Math.max(13, Math.round(size * 0.42));
+    const warningBadgeSize = Math.max(13, Math.round(inner * 0.5));
+
+    // Strip the "ASN-" prefix for the top-centre badge — the column already implies it's an
+    // assembly session, and the bare digits fit at 38 px. The +N suffix flags additional
+    // sessions on the same cell (multi-repeat ops, multiple operators on the same op).
+    const asnDigits = cell.latestAsnId ? cell.latestAsnId.replace(/^ASN-/, '') : '';
+    const asnLabel = asnDigits
+        ? (cell.extraAsnCount > 0 ? `${asnDigits} +${cell.extraAsnCount}` : asnDigits)
+        : '';
 
     return (
         <>
@@ -160,25 +213,31 @@ export default function OpTile({cell, size = 22}) {
                 ref={ref}
                 onMouseEnter={handleEnter}
                 onMouseLeave={scheduleClose}
+                className={burst ? 'op-tile-burst' : undefined}
                 style={{
                     position: 'relative',
-                    width: size,
-                    height: size,
+                    width: tileWidth,
+                    height: tileHeight,
                     borderRadius: 3,
-                    border: `2px solid ${borderColour}`,
-                    backgroundColor: cell.opVerPhoto ? COLOURS.motorway : COLOURS.tarmac,
+                    border: `${borderWidth}px solid ${borderColour}`,
+                    // White base layer under every ASN cell so transparent / letterboxed
+                    // photos read cleanly. Photo → state tint → frame stack on top.
+                    backgroundColor: COLOURS.snow,
                     overflow: 'hidden',
                     flexShrink: 0,
                     boxSizing: 'border-box',
                     cursor: 'help',
-                    ...(state === 'andon'
+                    ...(burst ? {zIndex: 4} : {}),
+                    // Burst supersedes the andon pulse for its ~1s lifetime so the two animations
+                    // don't fight on the same element. Andon resumes on the next render after.
+                    ...(state === 'andon' && !burst
                         ? cell.andonUnknown
                             ? {animation: 'andon-pulse-large 0.9s ease-in-out infinite'}
                             : {animation: 'andon-pulse 1.5s ease-in-out infinite'}
                         : {}),
                 }}
             >
-                {cell.opVerPhoto && (
+                {cell.opVerPhoto ? (
                     <img
                         src={cell.opVerPhoto}
                         alt=""
@@ -186,14 +245,23 @@ export default function OpTile({cell, size = 22}) {
                             width: '100%',
                             height: '100%',
                             objectFit: 'cover',
-                            filter: state === 'pending' ? 'grayscale(1) brightness(0.5)' : isAllDone ? 'brightness(0.7)' : 'none',
+                            filter: isAllDone ? 'brightness(0.7)' : 'none',
                         }}
                     />
-                )}
-                {isAllDone && (
+                ) : (
                     <div style={{
                         position: 'absolute', inset: 0,
-                        background: 'rgba(34, 197, 94, 0.45)',
+                        filter: isAllDone ? 'brightness(0.7)' : 'none',
+                    }}>
+                        <PhotoPlaceholder />
+                    </div>
+                )}
+                {STATE_TINTS[state] && (
+                    // Subtle state-coloured wash (30 %) over the photo — a faint hint that
+                    // reinforces the frame colour without overpowering the underlying image.
+                    <div style={{
+                        position: 'absolute', inset: 0,
+                        background: STATE_TINTS[state],
                         pointerEvents: 'none',
                     }} />
                 )}
@@ -205,8 +273,8 @@ export default function OpTile({cell, size = 22}) {
                             top: '50%',
                             left: '50%',
                             transform: 'translate(-50%, -50%)',
-                            width: Math.round(size * 0.62),
-                            height: Math.round(size * 0.62),
+                            width: Math.round(inner * 0.62),
+                            height: Math.round(inner * 0.62),
                             borderRadius: '50%',
                             background: `conic-gradient(${pieColour} ${piePct}%, rgba(0,0,0,0.55) ${piePct}%)`,
                             boxShadow: '0 0 3px rgba(0,0,0,0.55)',
@@ -220,7 +288,7 @@ export default function OpTile({cell, size = 22}) {
                             borderRadius: '50%',
                             background: 'rgba(0,0,0,0.85)',
                             color: COLOURS.snow,
-                            fontSize: Math.max(7, Math.round(size * 0.22)),
+                            fontSize: Math.max(7, Math.round(inner * 0.22)),
                             fontWeight: 700,
                             display: 'flex',
                             alignItems: 'center',
@@ -337,6 +405,32 @@ export default function OpTile({cell, size = 22}) {
                         fontVariantNumeric: 'tabular-nums',
                     }}>
                         {cell.completed || 0}/{cell.needed}
+                    </div>
+                )}
+                {asnLabel && (
+                    <div
+                        title={cell.extraAsnCount > 0
+                            ? `Latest: ${cell.latestAsnId} (+${cell.extraAsnCount} more)`
+                            : cell.latestAsnId}
+                        style={{
+                            position: 'absolute',
+                            top: 1,
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            background: 'rgba(0,0,0,0.78)',
+                            color: COLOURS.snow,
+                            fontSize: 7,
+                            fontWeight: 700,
+                            lineHeight: 1,
+                            padding: '1px 3px',
+                            borderRadius: 2,
+                            fontVariantNumeric: 'tabular-nums',
+                            whiteSpace: 'nowrap',
+                            pointerEvents: 'none',
+                            zIndex: 3,
+                        }}
+                    >
+                        {asnLabel}
                     </div>
                 )}
                 {cell.required && cell.versionLabels && cell.versionLabels.length > 0 && (

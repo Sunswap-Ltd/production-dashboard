@@ -6,7 +6,6 @@ import MetricsPanel from './components/MetricsPanel';
 import Matrix from './components/Matrix';
 import FooterBar from './components/FooterBar';
 import SettingsPopover from './components/SettingsPopover';
-import AreaBanners from './components/AreaBanners';
 
 const DEFAULT_LINE_HINT = 'Endurance';
 
@@ -35,6 +34,28 @@ function useGlobalStyles() {
                 50% {
                     box-shadow: 0 0 56px 10px rgba(255,80,80,1);
                     transform: scale(1.10);
+                }
+            }
+            /* Step-completion burst: fired once per ASN when a new Session Step ticks over.
+               Scale 3× per the plan — z-index lifts the tile above neighbouring cells (z 1)
+               and station banners (z 2) but stays under the sticky slot-header row (z 3)
+               and the sticky corner (z 5). */
+            @media (prefers-reduced-motion: no-preference) {
+                @keyframes op-tile-burst {
+                    0%   { transform: scale(1);   box-shadow: 0 0 0 0 rgba(255, 71, 0, 0); }
+                    20%  { transform: scale(3);   box-shadow: 0 0 28px 8px rgba(255, 71, 0, 0.65); }
+                    60%  { transform: scale(3);   box-shadow: 0 0 20px 6px rgba(255, 71, 0, 0.45); }
+                    100% { transform: scale(1);   box-shadow: 0 0 0 0 rgba(255, 71, 0, 0); }
+                }
+                .op-tile-burst {
+                    animation: op-tile-burst 1000ms cubic-bezier(0.2, 0.8, 0.2, 1) 1;
+                    transform-origin: center center;
+                    will-change: transform;
+                }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .op-tile-burst {
+                    box-shadow: 0 0 0 3px rgba(255, 71, 0, 0.8);
                 }
             }
         `;
@@ -127,7 +148,10 @@ export default function App() {
         const line = data.lineColumns.find(l => l.lineId === r.lineId);
         return line && line.lineName === selectedLine;
     });
-    const areaGroupsForView = (lineColumnsForView[0] && lineColumnsForView[0].areaGroups) || [];
+    const selectedLineId = lineColumnsForView[0] ? lineColumnsForView[0].lineId : null;
+    const stationRatesForLine = selectedLineId
+        ? ((data.metrics && data.metrics.stationRatesByLineId) || {})[selectedLineId] || {}
+        : {};
 
     return (
         <div style={layout.container}>
@@ -140,24 +164,17 @@ export default function App() {
             </div>
 
             <div style={layout.kpiStrip}>
-                <MetricsPanel data={data} />
+                <MetricsPanel data={data} selectedLine={selectedLine} selectedLineId={selectedLineId} />
             </div>
 
             <div style={layout.center}>
-                <div style={{
-                    flexShrink: 0,
-                    maxHeight: '38vh',
-                    overflowY: 'auto',
-                    borderBottom: '1px solid rgba(57,57,57,0.5)',
-                }}>
-                    <AreaBanners
-                        areaGroups={areaGroupsForView}
-                        openDefects={data.openDefects || []}
-                        andonAlerts={data.andonAlerts || []}
-                    />
-                </div>
                 <div style={{flex: 1, position: 'relative', minHeight: 0}}>
-                    <Matrix lineColumns={lineColumnsForView} lineMatrixRows={lineMatrixRowsForView} />
+                    <Matrix
+                        lineColumns={lineColumnsForView}
+                        lineMatrixRows={lineMatrixRowsForView}
+                        stationRates={stationRatesForLine}
+                        latestStepCompleteByAsn={data.latestStepCompleteByAsn || {}}
+                    />
                 </div>
             </div>
 

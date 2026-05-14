@@ -1,4 +1,65 @@
 import {TAKT_DEFAULTS} from './constants';
+import {parseHHMM} from './helpers';
+
+export function parseShiftSettings(settingRecords) {
+    const lookup = {};
+    for (const r of settingRecords || []) {
+        const k = r.variable;
+        if (k) lookup[k] = r.value;
+    }
+    const shiftStartMin = parseHHMM(lookup['Shift Start']) ?? (8 * 60);
+    const shiftEndMin = parseHHMM(lookup['Shift End']) ?? (17 * 60);
+    const breaks = [];
+    for (let i = 1; i <= 5; i++) {
+        const s = parseHHMM(lookup[`Break ${i} Start`]);
+        const e = parseHHMM(lookup[`Break ${i} End`]);
+        if (s != null && e != null && e > s) breaks.push({startMin: s, endMin: e});
+    }
+    breaks.sort((a, b) => a.startMin - b.startMin);
+    return {shiftStartMin, shiftEndMin, breaks};
+}
+
+export function productiveMinutesPerShift(shift) {
+    const total = shift.shiftEndMin - shift.shiftStartMin;
+    const breakSum = (shift.breaks || []).reduce((a, b) => a + (b.endMin - b.startMin), 0);
+    return Math.max(0, total - breakSum);
+}
+
+export function elapsedProductiveMinutes(shift, now) {
+    const nowMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+    if (nowMin <= shift.shiftStartMin) return 0;
+    const total = productiveMinutesPerShift(shift);
+    if (nowMin >= shift.shiftEndMin) return total;
+    let elapsed = nowMin - shift.shiftStartMin;
+    for (const b of shift.breaks || []) {
+        if (nowMin <= b.startMin) break;
+        const end = Math.min(nowMin, b.endMin);
+        elapsed -= Math.max(0, end - b.startMin);
+    }
+    return Math.max(0, Math.min(total, elapsed));
+}
+
+export function expectedBuildPctByNow(dailyTargetPct, productiveTotal, elapsed) {
+    if (productiveTotal <= 0) return 0;
+    const v = dailyTargetPct * (elapsed / productiveTotal);
+    return Math.max(0, Math.min(dailyTargetPct, v));
+}
+
+// RAG per the user's spec: green if on/ahead, amber within 5pp behind, red if >5pp behind.
+export function productionRateStatus(actualPct, expectedPct) {
+    if (actualPct >= expectedPct) return 'green';
+    if (actualPct >= expectedPct - 5) return 'amber';
+    return 'red';
+}
+
+export function paceStatus(actualPace, targetPace) {
+    if (targetPace <= 0) return 'amber';
+    const ratio = actualPace / targetPace;
+    if (ratio >= 0.95) return 'green';
+    if (ratio >= 0.80) return 'amber';
+    return 'red';
+}
+
 
 export function computeTaktTime(availableHours, targetOutput) {
     const hrs = availableHours || TAKT_DEFAULTS.AVAILABLE_HOURS;

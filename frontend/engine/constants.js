@@ -16,10 +16,14 @@ export const TABLES = {
     KPIS: 'KPIs',
     SETTINGS: 'Settings',
     DEFECTS: 'Defects',
+    SESSION_STEPS: 'Session Steps',
 };
+
+export const KPI_PRODUCTION_RATE_TARGET = 'KPI-376';
 
 export const FIELDS = {
     ASN: {
+        ASSEMBLY_SESSION_ID: 'Assembly Session ID',
         STATUS: 'Status',
         TECHNICIAN: 'Technician',
         BUILD: 'Build',
@@ -71,6 +75,23 @@ export const FIELDS = {
         VMR: 'Variant Manufacturing Release',
         OPERATION_VERSION: 'Operation Version',
         REPEATS: 'Operation Versions repeats',
+        PERCENTAGE_OF_VARIANT: 'Percentage of Variant',
+        CYCLE_TIME_HOURS: 'Cycle Time (hours)',
+    },
+    STEP: {
+        STEP_ID: 'Step ID',
+        ASN: 'Assembly Session',
+        STATUS: 'Status',
+        COMPLETE_TIME: 'Complete Time',
+        BUILD_PCT_PER_STEP: 'Build Percentage per Step',
+        STEP_NUMBER: 'Step Number',
+    },
+    KPI_RECORD: {
+        KPI: 'KPI',
+        DATE: 'Date',
+        METRIC: 'Metric',
+        UNIT: 'Unit',
+        TYPE: 'Type',
     },
     STATION: {
         TITLE: 'Title',
