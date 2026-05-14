@@ -56,8 +56,8 @@ Symptoms of "inspecting the wrong bundle":
 | `frontend/styles.js` | Sunswap palette (`COLOURS.*`), `STATE_COLOURS`, grid layout |
 | `frontend/components/HeaderBar.js` | Top bar: title (= selected line), clock, line dropdown |
 | `frontend/components/MetricsPanel.js` | KPI cards in the strip below the header |
-| `frontend/components/Matrix.js` | The big one. Transposed matrix + `AreaStrip` + `SlotColumnHeader` + `LeaderTile` |
-| `frontend/components/OpTile.js` | Per-cell tile: state border, pie chart, ✓ tint, photo, popover, ⚠ warning, operator headshot, version label, minute badge |
+| `frontend/components/Matrix.js` | The big one. Transposed matrix + `SlotColumnHeader` + per-op `Exp`/`Median` row |
+| `frontend/components/OpTile.js` | Per-cell tile: state frame, state tint, pie chart, photo (or `PhotoPlaceholder` SVG), popover, ⚠ warning, operator headshot, version label, minute badge |
 | `frontend/components/FooterBar.js` | Direct-assembly attendance + active andon count |
 | `frontend/engine/constants.js` | Airtable table + field names (exact strings, including the trailing space in `Supply Chain `) |
 | `frontend/engine/helpers.js` | `safeStr/safeNum/safeLink/safeAttachment`, `durationToHours`, `formatDuration` |
@@ -70,10 +70,10 @@ Symptoms of "inspecting the wrong bundle":
 
 1. **Tables read** via `useRecords` (one hook per table). Records flow into the big `useMemo` that does everything.
 2. **Per-row parsing** of each Airtable table into shape-typed JS objects (sessions, breaks, builds, slots, op-versions, areas, stations, lines, team, timesheets).
-3. **Operation-version canonicalisation** — for each parent operation, pick the "latest released" op-version (Status === `"Released"`, highest version number from `-vN` in the name). Its cycle time + sequenceId + title become the column's canonical values.
-4. **Per build-slot loop** — walk variant config, build cellMap per `(station, operationId)`, aggregate across op-versions when needed. Track `expectedByOpId` (VMR's required versions + repeats) and `actualByOpId` (this build's actual ASNs).
-5. **State derivation per cell** — andon > live > paused > completed > partial > pending, with `completionFraction` for the pie chart and `completionMinutes` for the bottom-right badge.
-6. **Orphan-cell pass** — ASNs at ops not in the VMR get synthesised cells (so the matrix surfaces them), and a column is added to `opVersionsByLineId`.
+3. **Operation-version canonicalisation** — for each parent operation, pick the "latest released" op-version (Status === `"Released"`, highest version number from `-vN` in the name). Its cycle time + sequenceId + title become the column's canonical values. Op-version `Station` is run through `stripQuotes()` because some records have `"…"` typed around the station title, which would otherwise drop them out of the active-stations set and silently kill their row in the matrix.
+4. **Per build-slot loop** — walk variant config, build cellMap per `(station, operationId)`, aggregate across op-versions when needed. Track `expectedByOpId` (VMR's required versions + repeats) and `actualByOpId` (this build's actual ASNs). Each cell also tracks `scheduled` count.
+5. **State derivation per cell** — most-active-wins: `andon > live > paused > completed > scheduled > pending`. (`partial` is gone; any non-zero `completed` lands in `completed` and surfaces via the pie + minute badge.) `completionFraction` drives the conic-gradient pie, `completionMinutes` drives the bottom-right badge.
+6. **Orphan-cell pass** — ASNs at ops not in the VMR get synthesised cells (so the matrix surfaces them), and a column is added to `opVersionsByLineId`. Same most-active-wins derivation applies.
 7. **Warning pass** — flag wrong-version / wrong-count / missing / orphan as `cell.warning = [string, ...]` (drives the amber ⚠ badge).
 8. **Slot filter** — keep only slots whose number falls in the in-progress range (min → max of in-progress slot numbers; everything between is included regardless of status).
 9. **Post-filter pass** — compute per-column `repeatsLatest` (from the highest-slotNum `progress > 0` slot's VMR) and `medianActualSeconds` (median of in-view completed-session assembly times).
@@ -82,16 +82,16 @@ Symptoms of "inspecting the wrong bundle":
     - **Stations alphabetical** within each area (STN-10 before STN-20 …)
     - **Ops by sequenceId** (using the latest-released op-version's value)
 
-The hook returns: `lineColumns`, `lineMatrixRows`, `andonAlerts`, `metrics`, plus the missing-tables error path.
+The hook returns: `lineColumns`, `lineMatrixRows`, `andonAlerts` (each carries `lineName`), `openDefects` (each carries `lineName`), `metrics`, `settings` + `settingsTable`, plus the missing-tables error path. The `lineName` tags let `MetricsPanel` filter the Live Defects / Andons KPI cards to the currently selected line.
 
 ---
 
 ## Visual hierarchy (current)
 
 ```
-ENDURANCE LINE (header)
-[KPI strip: WIP, On Floor, Completed Today, Production Rate, Line Balance, Bottleneck]
-[AreaStrip — leader cards: area title (Sol) + TL/QA/PS/SC avatars in a row, one card per area]
+ENDURANCE LINE (header)                                                  ← 56 px
+[KPI strip: WiP · On Floor · Completed · Prod Rate · Line Balance ·
+             Bottleneck · Live Defects · Andons (unique/total) ]          ← 128 px (doubled, big type)
 
 ┌──────────────┬───── slot 0159 ─── slot 0160 ─── slot 0162 ───  …  ─── slot 0193 ─┐
 │ OPERATION    │ Winter           │ Tundra        │ Trucker       │   │            │
@@ -110,15 +110,22 @@ ENDURANCE LINE (header)
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-OpTile cell anatomy (38 px square):
-- **Border**: state colour (Sol = live, amber = paused, red = andon, green = completed, tarmac = pending)
-- **Background**: op-version photo (or tarmac if no photo)
-- **Centre**: conic-gradient pie (% complete) for live/partial; green tint for completed
-- **Top-left**: amber ⚠ badge when `cell.warning` is truthy
-- **Top-right**: operator headshot (circular avatar with state-coloured border)
-- **Bottom-left**: version label (`v1`, `v2`, `v1+` if multiple)
-- **Bottom-right**: minute badge for completed (`12m`, `1h45`), `2/3` count badge for multi-repeat partial
-- **Andon pulse**: bigger glow + brighter peak; unknown-cause = `andon-pulse-large` (1.10× scale, 0.9s)
+The Area banner strip (TL/QA/PS/SC leader cards + per-area defect/andon thumbs) was **removed**. Live defects and active andons now surface as KPI cards in the top strip instead, scoped to the selected line.
+
+OpTile cell anatomy (~38 px square; status-driven frames):
+- **Layer order** (bottom → top): white base layer → photo (or inline `PhotoPlaceholder` SVG when missing) → state tint → frame → overlays.
+- **Frame**: 3 px coloured border driven by `STATE_COLOURS`. Pending is special — 2 px Road-grey wire frame so it sits visually beneath the active states.
+- **Frame palette** (mirrors Airtable's Assembly Sessions Status single-select):
+  - completed `#15803D` dark green · live `#4ADE80` light green · paused `#F59E0B` amber · scheduled `#3B82F6` blue · pending Road grey · andon `COLOURS.red` (pulses)
+- **State tint** (rgba wash over the photo):
+  - completed 70 % · live / paused / andon / scheduled 30 % · pending 20 % · (none for `na`)
+- **Pie**: conic-gradient at the centre when `0 < completionFraction < 1` and state ≠ andon. Pie colour = `STATE_COLOURS[state]`.
+- **Top-left**: amber ⚠ badge when `cell.warning` is truthy.
+- **Top-right**: operator headshot with state-coloured border; `+N` chip if more than one live operator.
+- **Bottom-left**: version label (`v1`, `v2`, `v1+` if multiple).
+- **Bottom-right**: minute badge whenever `completionMinutes > 0` (median across done repeats) — formatted `12m` / `1h45`. Multi-repeat partials may show `2/3` count instead.
+- **Andon pulse**: known-cause `andon-pulse` (1.5 s); unknown-cause `andon-pulse-large` (1.10× scale, 0.9 s).
+- **No photo on op-version**: `PhotoPlaceholder` renders a grey landscape glyph on Frost so empty cells still read consistently.
 
 ---
 
@@ -132,7 +139,7 @@ Palette in `frontend/styles.js`:
 | Frost | `#e6e2db` | Subtle backgrounds, muted text on dark |
 | Road | `#9b9b9b` | Mid grey, secondary elements |
 | Tarmac | `#393939` | Borders, dim states |
-| Sol | `#ff4700` | Brand orange — sparingly. Live ASN border, area title, sol stripe |
+| Sol | `#ff4700` | Brand orange — sparingly. Production-rate KPI accent, line-name title in header. (Note: live ASN cells use Airtable light-green `#4ADE80`, not Sol — Sol is no longer the live colour.) |
 | Motorway | `#000000` | Matrix background, header bg |
 
 Font stack: `'Arbeit', Arial, Helvetica, Calibri, sans-serif`.
@@ -152,6 +159,7 @@ Table names use exact strings in `constants.js` (case + spaces matter). Critical
 |---|---|---|
 | Production Stations | `Status` | Skip when `=== "Inactive"`. 12 legacy stations are inactive. |
 | Production Areas | `Supply Chain ` | **Trailing space in field name** — keep exact. |
+| Operation Versions | `Station` | Some records have literal `"` quote marks around the value (data-entry typo). `useProductionData` runs the value through `stripQuotes()` before matching against `activeStationTitles`. Don't remove that helper. |
 | Operation Versions | `Status` | `"Released"` is the canonical state for matrix columns. |
 | Operation Versions | `Operation Cycle Time VA&NVA` | Duration field → API returns **seconds**. Many op-versions don't have this set; missing → `Exp —`. |
 | Assembly Sessions | `Assembly Time (minutes)` | Value-added minutes (no breaks). Used for cycle-time badge + median. |
@@ -206,6 +214,8 @@ The dev server stays up at https://localhost:9002 (SSL cert pre-accepted). After
 - Edit mode of any kind (station reorder, slot pinning) — removed in the matrix-rewrite.
 - Floor map / draggable polygons — removed in the matrix-rewrite.
 - Right-panel build journey — removed; the matrix replaces it.
+- Area banner strip (TL/QA/PS/SC leader cards + per-area defect/andon thumbs) — removed; live defects + andons live in the KPI strip now, scoped to the selected line.
+- `partial` cell state — folded into `completed` (any non-zero `completed`).
 - Yamazumi / cycle-time-by-cell visualisation — current scope is op-state only.
 - Multi-line view — dropdown filters to one line at a time, persisted in URL hash `#line=...`.
 - Showing scheduled-but-not-started slots outside the in-progress range.
