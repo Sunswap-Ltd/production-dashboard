@@ -45,6 +45,10 @@ Symptoms of "inspecting the wrong bundle":
 3. If the dev server crashes (the `.tmp/` output dir disappears or the browser shows `Could not resolve .tmp/index.js`), restart it via `npx block run --port 9002 > /tmp/block_run.log 2>&1 &` and tail the log to confirm `Bundle updated`.
 4. After every restart, the user must accept the SSL cert again at https://localhost:9002 if their browser drops the exception.
 
+**⛔ DO NOT reload the Airtable tab once the user has enabled dev mode.** Airtable's dev-server URL field is *not* persisted across page reloads — any refresh (F5, `key: F5`, `navigate` to the same URL, hard reload, even a subsequent `navigate` call to the Airtable page) silently resets it back to the default `https://localhost:9000`, which is the wrong port for this project. After that the extension iframe goes blank, the right-hand "Development" panel will still claim "in development mode" with the wrong server URL, and you'll see no console errors — just a spinner. Recovery requires the **user** to manually re-enter the correct port. Claude cannot do this through browser MCP (localhost navigation is blocked, and the field isn't reachable in design mode without manual selection).
+
+The dev server hot-reloads in place, so after editing code a fresh `screenshot` is enough — never call `navigate` or send `F5`. The ONLY safe browser actions after dev mode is enabled are `screenshot` / `zoom` / `scroll` / `read_console_messages`.
+
 ---
 
 ## File map
