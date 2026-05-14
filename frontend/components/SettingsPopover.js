@@ -229,7 +229,7 @@ export default function SettingsPopover({settings, settingsTable}) {
             style={{
                 position: 'fixed',
                 bottom: 16,
-                right: 16,
+                left: 16,
                 width: COG_SIZE,
                 height: COG_SIZE,
                 borderRadius: '50%',
@@ -260,7 +260,7 @@ export default function SettingsPopover({settings, settingsTable}) {
             style={{
                 position: 'fixed',
                 bottom: 16 + COG_SIZE + 10,
-                right: 16,
+                left: 16,
                 width: 380,
                 maxHeight: 'min(70vh, 540px)',
                 background: COLOURS.panelBg,

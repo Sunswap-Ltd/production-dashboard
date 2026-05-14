@@ -578,7 +578,11 @@ export default function Matrix({lineColumns, lineMatrixRows, stationRates, lates
             position: 'absolute',
             inset: 0,
             overflow: 'auto',
-            padding: 12,
+            // No top padding — the sticky slot-header row sticks at the padding-box top,
+            // so a top inset leaves a gap above the header where scrolling rows would
+            // peek through. Side/bottom padding only.
+            padding: '0 12px 12px 12px',
+            backgroundColor: COLOURS.bg,
             color: COLOURS.snow,
         }}>
             {lines.map(line => (

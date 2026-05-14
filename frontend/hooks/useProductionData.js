@@ -1078,6 +1078,20 @@ export function useProductionData() {
         const now = new Date();
         const productiveMinutesElapsed = elapsedProductiveMinutes(shiftConfig, now);
 
+        // Settings lookup for the check-in banner's "didn't pause for break" rule.
+        // Falls back to 5 min when the Airtable row is missing.
+        const settingsLookup = {};
+        if (settingsTable) {
+            for (const r of settingsRecords) {
+                const k = safeStr(r, FIELDS.SETTING.VARIABLE);
+                if (k) settingsLookup[k] = safeStr(r, FIELDS.SETTING.VALUE);
+            }
+        }
+        const parsedThreshold = parseFloat(settingsLookup['Break Idle Threshold (min)']);
+        const breakIdleThresholdMin = Number.isFinite(parsedThreshold) && parsedThreshold > 0
+            ? parsedThreshold
+            : 5;
+
         // Daily target from KPI Records: Type = "Target" + KPI = KPI-376 + Date = today.
         // No fallback to prior days — if today's row is missing, the cards blank out.
         // Metric is an Airtable percent field returning a fraction (1 = 100%).
@@ -1121,17 +1135,20 @@ export function useProductionData() {
             lineVmrByLineId[lineId] = latest ? latest.variantMfgRelease : null;
         }
 
-        // Map ASN record-id → {buildId, station} from the already-parsed sessions, so a Session
-        // Step (linked to its parent ASN by record id) can be projected onto a line + station.
+        // Map ASN record-id → {buildId, station, techId} from the already-parsed sessions, so a
+        // Session Step (linked to its parent ASN by record id) can be projected onto a line +
+        // station + technician.
         const asnMeta = {};
         for (const s of allSessions) {
-            asnMeta[s.id] = {buildId: s.buildId, station: s.station};
+            asnMeta[s.id] = {buildId: s.buildId, station: s.station, techId: s.techId};
         }
 
         // Per-line buckets of completed steps for the day, plus a global latest-step-time per
-        // ASN that the Matrix uses to fire its burst animation when a step ticks over.
+        // ASN that the Matrix uses to fire its burst animation when a step ticks over. The
+        // per-tech variant powers the check-in banner's "didn't pause for break" detection.
         const stepsTodayByLineId = {};
         const latestStepCompleteByAsn = {};
+        const latestStepCompleteByTechId = {};
         const todayStart = new Date(now);
         todayStart.setHours(0, 0, 0, 0);
         const todayMs = todayStart.getTime();
@@ -1156,6 +1173,16 @@ export function useProductionData() {
                 // Track latest step completion per ASN (record id) for the burst animation.
                 if (!latestStepCompleteByAsn[asnRecordId] || completeStr > latestStepCompleteByAsn[asnRecordId]) {
                     latestStepCompleteByAsn[asnRecordId] = completeStr;
+                }
+
+                // Track latest step completion per technician for the check-in banner's
+                // break-not-paused detection. A tech may own multiple sessions in a day —
+                // we want the most recent step across any of them.
+                if (meta.techId) {
+                    const prev = latestStepCompleteByTechId[meta.techId];
+                    if (!prev || completeMs > prev) {
+                        latestStepCompleteByTechId[meta.techId] = completeMs;
+                    }
                 }
 
                 if (completeMs < todayMs) continue;
@@ -1409,6 +1436,12 @@ export function useProductionData() {
             : teamMembers;
         const attendance = computeAttendance(directAssemblyTeam);
 
+        // Active sessions (in-progress or paused), enriched with lineName so the
+        // check-in banner can filter to the currently selected line.
+        const activeSessions = allSessions
+            .filter(s => s.status === ASN_STATUS.IN_PROGRESS || s.status === ASN_STATUS.PAUSED)
+            .map(s => ({...s, lineName: lineNameByStationTitle[s.station] || null}));
+
         // --- Andon alerts: one entry per Assembly Session currently flagged as andon ---
         // Source-of-truth is the session itself (Status=Paused + Andon Flag=Andon), not the
         // Production Breaks table. AreaBanners + the Andons KPI card consume this list.
@@ -1503,6 +1536,8 @@ export function useProductionData() {
             activeBuilds,
             andonAlerts,
             teamMembers,
+            directAssemblyTeam,
+            activeSessions,
             metrics: {
                 wipCount,
                 completedToday,
@@ -1516,8 +1551,11 @@ export function useProductionData() {
                 shiftConfig,
                 productiveMinutesElapsed,
                 productiveMinutesTotal,
+                isOnBreakNow,
+                breakIdleThresholdMin,
             },
             latestStepCompleteByAsn,
+            latestStepCompleteByTechId,
             settings,
             settingsTable, // exposed so the popover can call updateRecordAsync
             openDefects,
