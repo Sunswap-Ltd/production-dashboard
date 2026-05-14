@@ -66,7 +66,7 @@ export const layout = {
         color: COLOURS.text,
         fontFamily: FONT_STACK,
         display: 'grid',
-        gridTemplate: '56px 128px 1fr 48px / 1fr',
+        gridTemplate: '56px 172px 1fr 48px / 1fr',
         overflow: 'hidden',
     },
     header: {
@@ -154,8 +154,11 @@ export const header = {
 };
 
 export const metrics = {
-    // Sized for the doubled KPI strip (128 px). Values are the dominant glyph — readable across
-    // the office at wall-display distance — with label and sub kept compact above/below.
+    // Sized for the 172 px KPI strip. The Production Rate card drives the height: header row
+    // (~22) + svg margin (4) + sparkline (80) + sub margin (2) + sub (~14) + card padding (16)
+    // + strip padding (28) ≈ 166 px minimum, plus a few px of breathing room. All children
+    // inside ProductionRateCard use flexShrink: 0 so the sparkline can't get compressed.
+    // Other cards (WiP, On Floor, etc.) just get more vertical room around their glyph.
     card: {
         backgroundColor: COLOURS.cardBg,
         borderRadius: 8,

@@ -316,6 +316,7 @@ export function useProductionData() {
                 progress,
                 goodsStatus,
                 variantMfgRelease: vmrText,
+                endUserLogoUrl: safeAttachment(r, FIELDS.BUILD.END_USER, {size: 'large'}),
             };
 
             builds.push(build);
@@ -875,6 +876,9 @@ export function useProductionData() {
                     progress,
                     goodsStatus: build.goodsStatus,
                     variantMfgRelease: build.variantMfgRelease,
+                    endUserLogoUrl: build.endUserLogoUrl,
+                    scheduledStart: safeStr(r, FIELDS.BUILD_SLOT.SCHEDULED_START),
+                    scheduledEnd: safeStr(r, FIELDS.BUILD_SLOT.SCHEDULED_END),
                     isCompleted,
                     isAssembling,
                 });
@@ -1074,41 +1078,30 @@ export function useProductionData() {
         const now = new Date();
         const productiveMinutesElapsed = elapsedProductiveMinutes(shiftConfig, now);
 
-        // Daily target from KPI Records (KPI-376 for today). Fall back to most-recent prior
-        // log, else a sensible default. Surface the fallback state so the UI can flag it.
-        let dailyTargetPct = 100;
-        let targetSource = 'fallback';
-        let targetSourceDate = null;
+        // Daily target from KPI Records: Type = "Target" + KPI = KPI-376 + Date = today.
+        // No fallback to prior days — if today's row is missing, the cards blank out.
+        // Metric is an Airtable percent field returning a fraction (1 = 100%).
+        // KPI is a linked-record field whose primary value is the full Name formula,
+        // e.g. "KPI-376 - Endurance Production Rate (% of build equivalent) " — so we
+        // match by code prefix rather than equality.
+        const kpiCodePrefix = `${KPI_PRODUCTION_RATE_TARGET} `;
+        let dailyTargetPct = null;
         if (kpiRecordsTable) {
-            const candidates = [];
             for (const r of kpiRecords) {
-                const kpi = safeStr(r, FIELDS.KPI_RECORD.KPI);
-                if (kpi !== KPI_PRODUCTION_RATE_TARGET) continue;
-                const dateStr = safeStr(r, FIELDS.KPI_RECORD.DATE);
+                if (safeStr(r, FIELDS.KPI_RECORD.TYPE) !== 'Target') continue;
+                if (!safeStr(r, FIELDS.KPI_RECORD.KPI).startsWith(kpiCodePrefix)) continue;
+                if (!isToday(safeStr(r, FIELDS.KPI_RECORD.DATE))) continue;
                 const metric = safeNum(r, FIELDS.KPI_RECORD.METRIC, NaN);
                 if (!Number.isFinite(metric)) continue;
-                candidates.push({dateStr, metric});
-            }
-            const todayMatch = candidates.find(c => isToday(c.dateStr));
-            // Airtable percent fields return a fraction (0..1); other numeric fields may already
-            // be in percent. Treat values <= 1 as fractions, else as already-in-percent.
-            const toPct = (m) => (m > 1 ? m : m * 100);
-            if (todayMatch) {
-                dailyTargetPct = toPct(todayMatch.metric);
-                targetSource = 'today';
-                targetSourceDate = todayMatch.dateStr;
-            } else if (candidates.length > 0) {
-                candidates.sort((a, b) => (b.dateStr || '').localeCompare(a.dateStr || ''));
-                const latest = candidates[0];
-                dailyTargetPct = toPct(latest.metric);
-                targetSource = 'previous';
-                targetSourceDate = latest.dateStr;
+                dailyTargetPct = metric * 100;
+                break;
             }
         }
+        const targetAvailable = dailyTargetPct != null;
 
-        const expectedByNowPct = expectedBuildPctByNow(
+        const expectedByNowPct = targetAvailable ? expectedBuildPctByNow(
             dailyTargetPct, productiveMinutesTotal, productiveMinutesElapsed,
-        );
+        ) : 0;
 
         // Per-line set of build ids in view + the most-recent-in-progress slot's VMR (used as
         // anchor for per-station share — same anchor the matrix already uses for `repeatsLatest`).
@@ -1182,10 +1175,17 @@ export function useProductionData() {
 
                 const stepDate = new Date(completeMs);
                 const productiveMin = elapsedProductiveMinutes(shiftConfig, stepDate);
+                // Wall-clock minute-of-day; lets us plot the chart against actual time
+                // (so breaks show as visible horizontal slices) without losing the
+                // productive-minute calc the pace numbers still rely on.
+                const wallMin = stepDate.getHours() * 60
+                    + stepDate.getMinutes()
+                    + stepDate.getSeconds() / 60;
 
                 if (!stepsTodayByLineId[lineIdForStep]) stepsTodayByLineId[lineIdForStep] = [];
                 stepsTodayByLineId[lineIdForStep].push({
                     productiveMin,
+                    wallMin,
                     pct,
                     station: meta.station || '',
                     asnRecordId,
@@ -1217,6 +1217,42 @@ export function useProductionData() {
 
         const BUCKET_MIN = 5;
 
+        // Wall-clock "now" in minutes-of-day, plus break-window helpers, used by both
+        // the chart (X-axis is wall-clock) and the Pace card ("on break" override).
+        const nowWallMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+        const shiftBreaks = (shiftConfig.breaks || []).slice().sort((a, b) => a.startMin - b.startMin);
+        const isOnBreakNow = shiftBreaks.some(b => nowWallMin > b.startMin && nowWallMin < b.endMin);
+
+        // Piecewise target polyline in wall-clock space. The dashed line rises only
+        // during productive minutes (slope = dailyTargetPct / productiveMinutesTotal)
+        // and stays flat across each break window. Returns null when no target.
+        const buildTargetPoints = () => {
+            if (!targetAvailable || productiveMinutesTotal <= 0) return null;
+            const slope = dailyTargetPct / productiveMinutesTotal;
+            const pts = [{wallMin: shiftConfig.shiftStartMin, cumPct: 0}];
+            let cursor = shiftConfig.shiftStartMin;
+            let cum = 0;
+            for (const br of shiftBreaks) {
+                const segStart = Math.max(cursor, shiftConfig.shiftStartMin);
+                const segEnd = Math.min(br.startMin, shiftConfig.shiftEndMin);
+                if (segEnd > segStart) {
+                    cum += (segEnd - segStart) * slope;
+                    pts.push({wallMin: segEnd, cumPct: cum});
+                }
+                // Flat across the break.
+                const brEnd = Math.min(br.endMin, shiftConfig.shiftEndMin);
+                if (brEnd > segEnd) {
+                    pts.push({wallMin: brEnd, cumPct: cum});
+                }
+                cursor = brEnd;
+            }
+            if (shiftConfig.shiftEndMin > cursor) {
+                cum += (shiftConfig.shiftEndMin - cursor) * slope;
+                pts.push({wallMin: shiftConfig.shiftEndMin, cumPct: cum});
+            }
+            return pts;
+        };
+
         for (const lineId of Object.keys(slotsByLineId)) {
             const steps = (stepsTodayByLineId[lineId] || []).slice().sort(
                 (a, b) => a.completeMs - b.completeMs,
@@ -1224,22 +1260,28 @@ export function useProductionData() {
 
             const actualPct = steps.reduce((acc, s) => acc + s.pct, 0);
 
-            // 5-min bucketed cumulative actual series up to "now" for the line graph.
-            const actualPoints = [{productiveMin: 0, cumPct: 0}];
+            // 5-min bucketed cumulative actual series up to "now" in wall-clock space.
+            // We plot the cumulative pct against the wall-clock minute of each step so
+            // the actual line lines up under the same X-axis as the piecewise target.
+            // Steps arrive sorted by completeMs (above), which means wallMin is also
+            // non-decreasing across today's records.
+            const actualPoints = [{wallMin: shiftConfig.shiftStartMin, cumPct: 0}];
             let running = 0;
-            let nextEdge = BUCKET_MIN;
+            let nextEdge = shiftConfig.shiftStartMin + BUCKET_MIN;
             for (const st of steps) {
-                while (st.productiveMin > nextEdge && nextEdge <= productiveMinutesTotal) {
-                    actualPoints.push({productiveMin: nextEdge, cumPct: running});
+                while (st.wallMin > nextEdge && nextEdge <= shiftConfig.shiftEndMin) {
+                    actualPoints.push({wallMin: nextEdge, cumPct: running});
                     nextEdge += BUCKET_MIN;
                 }
                 running += st.pct;
             }
-            const cutoff = Math.min(productiveMinutesElapsed, productiveMinutesTotal);
-            actualPoints.push({productiveMin: cutoff, cumPct: running});
+            const cutoffWall = Math.min(Math.max(nowWallMin, shiftConfig.shiftStartMin), shiftConfig.shiftEndMin);
+            actualPoints.push({wallMin: cutoffWall, cumPct: running});
 
-            const deltaPct = actualPct - expectedByNowPct;
-            const status = productionRateStatus(actualPct, expectedByNowPct);
+            const deltaPct = targetAvailable ? actualPct - expectedByNowPct : 0;
+            const status = targetAvailable
+                ? productionRateStatus(actualPct, expectedByNowPct)
+                : 'amber';
 
             productionRateByLineId[lineId] = {
                 actualPct,
@@ -1247,19 +1289,21 @@ export function useProductionData() {
                 expectedByNowPct,
                 deltaPct,
                 status,
-                targetSource,
-                targetSourceDate,
+                targetAvailable,
                 productiveMinutesElapsed,
                 productiveMinutesTotal,
-                series: {
-                    productiveMinutesTotal,
-                    productiveMinutesNow: cutoff,
+                onBreak: isOnBreakNow,
+                series: targetAvailable ? {
+                    shiftStartMin: shiftConfig.shiftStartMin,
+                    shiftEndMin: shiftConfig.shiftEndMin,
+                    nowWallMin: cutoffWall,
+                    breaks: shiftBreaks.map(b => ({
+                        startMin: Math.max(b.startMin, shiftConfig.shiftStartMin),
+                        endMin: Math.min(b.endMin, shiftConfig.shiftEndMin),
+                    })).filter(b => b.endMin > b.startMin),
                     actualPoints,
-                    targetPoints: [
-                        {productiveMin: 0, cumPct: 0},
-                        {productiveMin: productiveMinutesTotal, cumPct: dailyTargetPct},
-                    ],
-                },
+                    targetPoints: buildTargetPoints(),
+                } : null,
             };
 
             // Pace: shift-average so far + rolling last-60-productive-minute pace.
@@ -1268,7 +1312,7 @@ export function useProductionData() {
             const actualPacePctPerHr = productiveHoursElapsed > 0
                 ? actualPct / productiveHoursElapsed
                 : 0;
-            const targetPacePctPerHr = productiveHoursTotal > 0
+            const targetPacePctPerHr = targetAvailable && productiveHoursTotal > 0
                 ? dailyTargetPct / productiveHoursTotal
                 : 0;
             const recentCutoffMin = Math.max(0, productiveMinutesElapsed - 60);
@@ -1282,7 +1326,15 @@ export function useProductionData() {
                 actualPacePctPerHr,
                 recentPacePctPerHr,
                 targetPacePctPerHr,
-                status: paceStatus(recentPacePctPerHr || actualPacePctPerHr, targetPacePctPerHr),
+                targetAvailable,
+                onBreak: isOnBreakNow,
+                // While on break, override RAG to green and let the panel surface the
+                // "on break" label. Operators aren't expected to be producing.
+                status: isOnBreakNow
+                    ? 'green'
+                    : (targetAvailable
+                        ? paceStatus(recentPacePctPerHr || actualPacePctPerHr, targetPacePctPerHr)
+                        : 'amber'),
             };
 
             // Per-station rate vs station's share of the day's target.
@@ -1294,7 +1346,7 @@ export function useProductionData() {
                 stationActual[st.station] = (stationActual[st.station] || 0) + st.pct;
             }
             const stationRates = {};
-            for (const stationTitle of Object.keys(shareByStation)) {
+            for (const stationTitle of (targetAvailable ? Object.keys(shareByStation) : [])) {
                 const share = shareByStation[stationTitle];
                 if (!(share > 0)) continue;
                 const dailyTargetForStation = dailyTargetPct * share / 100;

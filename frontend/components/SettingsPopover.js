@@ -1,4 +1,4 @@
-import React, {useState, useEffect, useRef, useCallback} from 'react';
+import React, {useState, useEffect, useRef, useCallback, useMemo} from 'react';
 import ReactDOM from 'react-dom';
 import {COLOURS} from '../styles';
 import {FIELDS} from '../engine/constants';
@@ -26,7 +26,28 @@ function CogIcon({size = 22, colour = COLOURS.snow}) {
     );
 }
 
-function Row({setting, onSave, savingId, errorId}) {
+// Logical order for the panel: shift bounds first, then each break as a Start→End pair.
+// Anything we don't recognise sinks to the bottom (sorted by name) so adding a new
+// setting later doesn't accidentally land mid-list.
+function settingSortKey(variable) {
+    if (variable === 'Shift Start') return [0, 0, 0];
+    if (variable === 'Shift End') return [0, 1, 0];
+    const m = /^Break (\d+) (Start|End)$/.exec(variable || '');
+    if (m) return [1, parseInt(m[1], 10), m[2] === 'End' ? 1 : 0];
+    return [9, 0, variable || ''];
+}
+
+function compareSettings(a, b) {
+    const ka = settingSortKey(a.variable);
+    const kb = settingSortKey(b.variable);
+    for (let i = 0; i < ka.length; i++) {
+        if (ka[i] < kb[i]) return -1;
+        if (ka[i] > kb[i]) return 1;
+    }
+    return 0;
+}
+
+function Row({setting, onSave, savingId, errorMessage}) {
     const [draft, setDraft] = useState(setting.value);
     const lastSavedRef = useRef(setting.value);
 
@@ -40,7 +61,7 @@ function Row({setting, onSave, savingId, errorId}) {
 
     const dirty = draft !== setting.value;
     const saving = savingId === setting.recordId;
-    const errored = errorId === setting.recordId;
+    const errored = !!errorMessage;
 
     const commit = useCallback(() => {
         if (!dirty || saving) return;
@@ -101,16 +122,32 @@ function Row({setting, onSave, savingId, errorId}) {
                         boxSizing: 'border-box',
                     }}
                 />
-                <div style={{
-                    fontSize: 9,
-                    color: errored ? COLOURS.red : (saving ? COLOURS.sol : (dirty ? COLOURS.sol : COLOURS.road)),
-                    letterSpacing: 0.4,
-                    textTransform: 'uppercase',
-                    fontWeight: 600,
-                    minHeight: 11,
-                }}>
+                <div
+                    style={{
+                        fontSize: 9,
+                        color: errored ? COLOURS.red : (saving ? COLOURS.sol : (dirty ? COLOURS.sol : COLOURS.road)),
+                        letterSpacing: 0.4,
+                        textTransform: 'uppercase',
+                        fontWeight: 600,
+                        minHeight: 11,
+                    }}
+                    title={errored ? errorMessage : undefined}
+                >
                     {errored ? 'save failed' : saving ? 'saving…' : dirty ? 'unsaved · enter to save' : ''}
                 </div>
+                {errored && (
+                    <div style={{
+                        fontSize: 9,
+                        color: COLOURS.frost,
+                        lineHeight: 1.35,
+                        marginTop: 1,
+                        textTransform: 'none',
+                        letterSpacing: 0,
+                        fontWeight: 400,
+                    }}>
+                        {errorMessage}
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -119,8 +156,13 @@ function Row({setting, onSave, savingId, errorId}) {
 export default function SettingsPopover({settings, settingsTable}) {
     const [open, setOpen] = useState(false);
     const [savingId, setSavingId] = useState(null);
-    const [errorId, setErrorId] = useState(null);
+    // recordId → human-readable error message. Cleared per-record on next attempt.
+    const [errors, setErrors] = useState({});
     const panelRef = useRef(null);
+    const sortedSettings = useMemo(
+        () => settings.slice().sort(compareSettings),
+        [settings],
+    );
 
     // Close on click-outside or Escape.
     useEffect(() => {
@@ -140,22 +182,39 @@ export default function SettingsPopover({settings, settingsTable}) {
     }, [open]);
 
     const handleSave = useCallback(async (recordId, newValue) => {
+        const clearError = () => setErrors(prev => {
+            if (!(recordId in prev)) return prev;
+            const next = {...prev}; delete next[recordId]; return next;
+        });
+        const setError = (msg) => setErrors(prev => ({...prev, [recordId]: msg}));
+
         if (!settingsTable) {
-            setErrorId(recordId);
+            setError('Settings table not exposed in this Interface. Enable the Settings table (and its Value field) in the Fields panel.');
             return;
         }
-        setErrorId(null);
+        // Permission pre-check: hasPermissionToUpdateRecord returns false fast when the
+        // Value field isn't editable for this user in the Interface, before we burn an
+        // API round-trip on a guaranteed failure.
+        try {
+            const fieldsToUpdate = {[FIELDS.SETTING.VALUE]: newValue};
+            if (typeof settingsTable.hasPermissionToUpdateRecord === 'function'
+                && !settingsTable.hasPermissionToUpdateRecord(recordId, fieldsToUpdate)) {
+                setError('No write permission for the Value field. Enable editing on Settings → Value in the Interface\'s Fields panel.');
+                return;
+            }
+        } catch { /* SDK without permission API — fall through to save attempt */ }
+
+        clearError();
         setSavingId(recordId);
         try {
             await settingsTable.updateRecordAsync(recordId, {
                 [FIELDS.SETTING.VALUE]: newValue,
             });
         } catch (err) {
-            // Most likely cause: Value field not enabled in the Interface Extension's
-            // Fields panel for the Settings table, or user lacks write permission.
             // eslint-disable-next-line no-console
             console.error('[SettingsPopover] save failed:', err);
-            setErrorId(recordId);
+            const msg = (err && err.message) || 'Unknown error. Check console for details.';
+            setError(msg);
         } finally {
             setSavingId(null);
         }
@@ -234,7 +293,7 @@ export default function SettingsPopover({settings, settingsTable}) {
                     Settings
                 </span>
                 <span style={{fontSize: 10, color: COLOURS.road}}>
-                    {settings.length} {settings.length === 1 ? 'variable' : 'variables'}
+                    {sortedSettings.length} {sortedSettings.length === 1 ? 'variable' : 'variables'}
                 </span>
             </div>
             <div style={{
@@ -243,21 +302,21 @@ export default function SettingsPopover({settings, settingsTable}) {
                 flex: 1,
                 minHeight: 0,
             }}>
-                {settings.length === 0 && (
+                {sortedSettings.length === 0 && (
                     <div style={{padding: '20px 0', fontSize: 11, color: COLOURS.road, textAlign: 'center'}}>
                         No settings rows found. Add a record to the <em>Settings</em> table in Airtable.
                     </div>
                 )}
-                {settings.map(s => (
+                {sortedSettings.map(s => (
                     <Row
                         key={s.recordId}
                         setting={s}
                         onSave={handleSave}
                         savingId={savingId}
-                        errorId={errorId}
+                        errorMessage={errors[s.recordId]}
                     />
                 ))}
-                {!settingsTable && settings.length > 0 && (
+                {!settingsTable && sortedSettings.length > 0 && (
                     <div style={{
                         marginTop: 10,
                         padding: 8,

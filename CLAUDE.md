@@ -61,7 +61,7 @@ The dev server hot-reloads in place, so after editing code a fresh `screenshot` 
 | `frontend/components/HeaderBar.js` | Top bar: title (= selected line), clock, line dropdown |
 | `frontend/components/MetricsPanel.js` | KPI cards in the strip below the header |
 | `frontend/components/Matrix.js` | The big one. Transposed matrix + `SlotColumnHeader` + per-op `Exp`/`Median` row |
-| `frontend/components/OpTile.js` | Per-cell tile: state frame, state tint, pie chart, photo (or `PhotoPlaceholder` SVG), popover, ⚠ warning, operator headshot, version label, minute badge |
+| `frontend/components/OpTile.js` | Per-cell tile: state frame, state tint, pie chart, photo (or `PhotoPlaceholder` SVG), popover, ⚠ warning, operator headshot, minute badge |
 | `frontend/components/FooterBar.js` | Direct-assembly attendance + active andon count |
 | `frontend/engine/constants.js` | Airtable table + field names (exact strings, including the trailing space in `Supply Chain `) |
 | `frontend/engine/helpers.js` | `safeStr/safeNum/safeLink/safeAttachment`, `durationToHours`, `formatDuration` |
@@ -90,18 +90,54 @@ The hook returns: `lineColumns`, `lineMatrixRows`, `andonAlerts` (each carries `
 
 ---
 
+## Production Rate & Pace KPIs (target lookup)
+
+Both cards are denominated in **% of a build**. A "step" is a row in the `Session Steps` table; each carries a `Build Percentage per Step` value saying how much of a complete build that step represents.
+
+**Daily target lookup** — `useProductionData.js` walks the `KPI Records` table and picks the **first** row where ALL of:
+
+| Field | Required value |
+|---|---|
+| `Type` | `"Target"` (single-select; the table also has `"Actual"` rows used for historical logs — those are ignored) |
+| `KPI` | Linked record whose `Name` starts with `"KPI-376 "` (i.e. KPI-376 = *Endurance Production Rate (% of build equivalent)*). The KPI table's primary field is the formula `Name`, which is `"KPI-376 - Endurance Production Rate …"` — so we match by code prefix, not equality. `KPI_PRODUCTION_RATE_TARGET` in `constants.js` is the bare code (`"KPI-376"`). |
+| `Date` | Today (`isToday(...)`). No fallback to prior days — see below. |
+| `Metric` | A finite number. **Airtable percent fields return a fraction** (e.g. `1` for 100%, `0.85` for 85%), so we multiply by 100. |
+
+**If no such row exists today**, `dailyTargetPct = null` and `targetAvailable = false`. The Production Rate and Pace cards both render `—  no Target KPI for today` rather than falling back to a hardcoded 100% (we removed that fallback — it silently hid configuration errors). Per-station rates are also skipped (they need a target to be meaningful).
+
+The daily target row needs to be **created in Airtable** every operating day. The dashboard does not synthesise it.
+
+**Derived numbers (when a target exists):**
+
+- `actualPct` = Σ `Build Percentage per Step` across every Session Step completed today by an ASN on a build currently in view on the selected line.
+- `expectedByNowPct` = `dailyTargetPct × (productiveMinutesElapsed / productiveMinutesTotal)`. Productive minutes come from the `Settings` table's shift start/end minus configured breaks; `elapsedProductiveMinutes` computes against wall clock.
+- `deltaPct` = `actualPct − expectedByNowPct`. RAG: green ≥ expected, amber within 5 pp behind, red > 5 pp behind.
+- `targetPacePctPerHr` = `dailyTargetPct / productiveHoursTotal` (steady pace to hit 100%).
+- `actualPacePctPerHr` = `actualPct / productiveHoursElapsed` (shift-average so far).
+- `recentPacePctPerHr` = sum of step %s in the **last 60 productive minutes**, divided by that window in hours. This is the headline number on the Pace card. RAG: green ≥ 95% of target, amber ≥ 80%, red below.
+
+**Chart axis** — the production-rate sparkline plots in **wall-clock** minutes (shift start → shift end), NOT productive minutes. Each step's wall-clock minute-of-day is captured at parse time (`wallMin`) alongside `productiveMin`. The dashed target is a piecewise polyline (`buildTargetPoints`): rising during productive segments at slope `dailyTargetPct / productiveMinutesTotal`, flat across each break window. This makes the break periods visible as horizontal sections on the dashed line. The actual line uses the same X-axis so it lines up. Don't switch back to productive-minute X — you'd hide the breaks again.
+
+**On-break override** — when wall-clock "now" lies strictly inside any break window, `paceByLineId[lineId].onBreak = true` and `status = "green"`. The Pace card swaps its pill label to **"on break"** (green) regardless of the recent-pace number. The Production Rate card's RAG tint is intentionally **not** overridden — production rate vs. target hasn't suddenly improved just because the team is on lunch.
+
+**Interface-extension gotcha**: the `Type` field on KPI Records must be enabled in the Airtable interface's Fields popover (same rule as every other field — see schema notes below). If today's Target row exists in the table but the card still says "no Target KPI for today", check the Fields popover first.
+
+---
+
 ## Visual hierarchy (current)
 
 ```
 ENDURANCE LINE (header)                                                  ← 56 px
 [KPI strip: WiP · On Floor · Completed · Prod Rate · Line Balance ·
-             Bottleneck · Live Defects · Andons (unique/total) ]          ← 128 px (doubled, big type)
+             Bottleneck · Live Defects · Andons (unique/total) ]          ← 172 px (sized around the prod-rate sparkline; see styles.js)
 
 ┌──────────────┬───── slot 0159 ─── slot 0160 ─── slot 0162 ───  …  ─── slot 0193 ─┐
-│ OPERATION    │ Winter           │ Tundra        │ Trucker       │   │            │
+│ OPERATION    │ [Cranswick logo] │ [Bannister]   │ [no logo]     │   │            │  ← End User logo (22 px, contain)
+│              │ 0159 BLD-00755   │ 0160 BLD-00761│ 0162 BLD-…    │   │            │
 │              │ [bar] 0%         │ [bar] 7%      │ [bar] 100%    │   │            │  ← SlotColumnHeader
 │              │ S-3962-D-I       │ S-3962-D-I    │ S-3962-D-I    │   │ MR badge   │
 │              │                  │               │ COMPLETE      │   │            │
+│              │ 12 Feb → 13 May  │ 9 Feb → 8 May │ …             │   │            │  ← Scheduled Build Start → Scheduled Completion
 ├──────────────┼──────────────────┼───────────────┼───────────────┼───┼────────────┤
 │ BATTERY PACK & ELECTRICAL ◄── area banner (full-width, Sol)                       │
 │   STN-40 REFRIGERATION    ◄── station banner (full-width, white)                  │
@@ -126,8 +162,8 @@ OpTile cell anatomy (~38 px square; status-driven frames):
 - **Pie**: conic-gradient at the centre when `0 < completionFraction < 1` and state ≠ andon. Pie colour = `STATE_COLOURS[state]`.
 - **Top-left**: amber ⚠ badge when `cell.warning` is truthy.
 - **Top-right**: operator headshot with state-coloured border; `+N` chip if more than one live operator.
-- **Bottom-left**: version label (`v1`, `v2`, `v1+` if multiple).
 - **Bottom-right**: minute badge whenever `completionMinutes > 0` (median across done repeats) — formatted `12m` / `1h45`. Multi-repeat partials may show `2/3` count instead.
+- Version label (`v1`, `v2`, `v1+`) is **not** rendered on the tile — the op-version photo already conveys which version is in play. Version detail still shows in the hover popover for QA.
 - **Andon pulse**: known-cause `andon-pulse` (1.5 s); unknown-cause `andon-pulse-large` (1.10× scale, 0.9 s).
 - **No photo on op-version**: `PhotoPlaceholder` renders a grey landscape glyph on Frost so empty cells still read consistently.
 
@@ -169,8 +205,11 @@ Table names use exact strings in `constants.js` (case + spaces matter). Critical
 | Assembly Sessions | `Assembly Time (minutes)` | Value-added minutes (no breaks). Used for cycle-time badge + median. |
 | Assembly Sessions | `Actual Time (hh:mm:ss)` | Elapsed seconds. Available but **not used for badges** — noisy (lunch/shift gaps inflate it). |
 | Build Slots | `Line Slot ID` | Format `"<number>-<line name>"`. Strip the `-<lineName>` suffix to get the number. |
+| Build Slots | `Scheduled Build Start` / `Scheduled Completion` | Date fields (ISO `YYYY-MM-DD`). Rendered under the slot status as `12 Feb → 13 May`. **Don't** use `new Date(...).toLocaleDateString()` directly — Airtable returns no zone, so it parses as UTC midnight and shifts by one day in negative-UTC zones. Parse the string manually (see `formatScheduleDate` in Matrix.js). |
 | Builds | `Build ID` | Some records embed nickname like `"BLD-00761 (Circuit)"`. Detect with `endsWith('(${nickname})')` to avoid duplicating. |
+| Builds | `End User` | **multipleAttachments** — customer logo. Read via `safeAttachment(r, ..., {size: 'large'})` because the small thumb (~36 px tall) is undersized for the 22 px header strip when downscaled to maintain crispness. Some builds have no logo set; the slot header reserves the strip height regardless so columns stay aligned. |
 | Timesheets | `Direct Assembly Cost` | **Checkbox**, not a number. Use `r.getCellValue(...)` cast to bool. |
+| KPI Records | `Type`, `KPI`, `Date`, `Metric` | Daily production-rate target lives here. See "Production Rate & Pace KPIs" above for the exact filter (`Type=Target` + `KPI` Name starts with `KPI-376` + `Date=today`). `Metric` is an Airtable percent field returning a fraction (× 100 to get percent). Linked `KPI` field's primary value is the long `Name` formula, not the bare code — match by prefix. |
 
 **Interface Extension fields panel**: any new field added to `constants.js` must also be **enabled in the Airtable interface's Fields popover** before it's visible to `record.getCellValue(...)`. If you see `Exp —` everywhere despite data existing, the field isn't enabled in the interface.
 

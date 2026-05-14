@@ -433,22 +433,6 @@ export default function OpTile({cell, size = 22, width, burst = false}) {
                         {asnLabel}
                     </div>
                 )}
-                {cell.required && cell.versionLabels && cell.versionLabels.length > 0 && (
-                    <div
-                        title={`Version${cell.versionLabels.length > 1 ? 's' : ''}: ${cell.versionLabels.join(', ')}`}
-                        style={{
-                            position: 'absolute', bottom: 1, left: 1,
-                            background: 'rgba(0,0,0,0.75)', color: COLOURS.frost,
-                            fontSize: 7, fontWeight: 700, lineHeight: 1,
-                            padding: '1px 3px', borderRadius: 2,
-                            fontVariantNumeric: 'tabular-nums',
-                        }}
-                    >
-                        {cell.versionLabels.length === 1
-                            ? cell.versionLabels[0]
-                            : `${cell.versionLabels[0]}+`}
-                    </div>
-                )}
             </div>
             {hovered && (
                 <Popover
