@@ -1077,6 +1077,16 @@ export function useProductionData() {
         const now = new Date();
         const productiveMinutesElapsed = elapsedProductiveMinutes(shiftConfig, now);
 
+        // Settings lookup for the check-in banner's "didn't pause for break" rule.
+        // Falls back to 5 min when the Airtable row is missing.
+        const settingsLookup = {};
+        if (settingsTable) {
+            for (const r of settingsRecords) {
+                const k = safeStr(r, FIELDS.SETTING.VARIABLE);
+                if (k) settingsLookup[k] = safeStr(r, FIELDS.SETTING.VALUE);
+            }
+        }
+
         // Daily target from KPI Records: Type = "Target" + KPI = KPI-376 + Date = today.
         // No fallback to prior days — if today's row is missing, the cards blank out.
         // Metric is an Airtable percent field returning a fraction (1 = 100%).
@@ -1120,11 +1130,12 @@ export function useProductionData() {
             lineVmrByLineId[lineId] = latest ? latest.variantMfgRelease : null;
         }
 
-        // Map ASN record-id → {buildId, station} from the already-parsed sessions, so a Session
-        // Step (linked to its parent ASN by record id) can be projected onto a line + station.
+        // Map ASN record-id → {buildId, station, techId} from the already-parsed sessions, so a
+        // Session Step (linked to its parent ASN by record id) can be projected onto a line +
+        // station + technician.
         const asnMeta = {};
         for (const s of allSessions) {
-            asnMeta[s.id] = {buildId: s.buildId, station: s.station};
+            asnMeta[s.id] = {buildId: s.buildId, station: s.station, techId: s.techId};
         }
 
         // Per-line buckets of completed steps for the day, plus a global latest-step-time per
@@ -1679,6 +1690,7 @@ export function useProductionData() {
                 shiftConfig,
                 productiveMinutesElapsed,
                 productiveMinutesTotal,
+                isOnBreakNow,
             },
             latestStepCompleteByAsn,
             settings,
