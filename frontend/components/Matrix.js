@@ -260,7 +260,7 @@ function StationRateChip({rate}) {
     );
 }
 
-function LineSection({line, rows, stationRates, pulsingAsnIds}) {
+function LineSection({line, rows, stationRates, pulsingAsnIds, rosterByTechId}) {
     const stationGroups = line.stations || [];
     const slots = rows || [];
     if (stationGroups.length === 0 || slots.length === 0) return null;
@@ -485,6 +485,7 @@ function LineSection({line, rows, stationRates, pulsingAsnIds}) {
                                                                 size={CELL_SIZE}
                                                                 width={TILE_WIDTH}
                                                                 burst={isBursting}
+                                                                rosterByTechId={rosterByTechId}
                                                             />
                                                         </div>
                                                     </td>
@@ -553,7 +554,7 @@ function useStepBursts(latestStepCompleteByAsn) {
     return pulsingAsnIds;
 }
 
-export default function Matrix({lineColumns, lineMatrixRows, stationRates, latestStepCompleteByAsn}) {
+export default function Matrix({lineColumns, lineMatrixRows, stationRates, latestStepCompleteByAsn, rosterByTechId}) {
     const lines = lineColumns || [];
     const rowsByLine = {};
     for (const r of (lineMatrixRows || [])) rowsByLine[r.lineId] = r.slots;
@@ -592,6 +593,7 @@ export default function Matrix({lineColumns, lineMatrixRows, stationRates, lates
                     rows={rowsByLine[line.lineId] || []}
                     stationRates={stationRates || {}}
                     pulsingAsnIds={pulsingAsnIds}
+                    rosterByTechId={rosterByTechId || {}}
                 />
             ))}
         </div>

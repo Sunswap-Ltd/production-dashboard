@@ -3,7 +3,7 @@ import {useProductionData} from './hooks/useProductionData';
 import {layout, errorStyles, header as headerStyles} from './styles';
 import HeaderBar from './components/HeaderBar';
 import MetricsPanel from './components/MetricsPanel';
-import CheckInPanel from './components/CheckInPanel';
+import TechnicianStrip from './components/TechnicianStrip';
 import Matrix from './components/Matrix';
 import FooterBar from './components/FooterBar';
 import SettingsPopover from './components/SettingsPopover';
@@ -58,10 +58,6 @@ function useGlobalStyles() {
                 .op-tile-burst {
                     box-shadow: 0 0 0 3px rgba(255, 71, 0, 0.8);
                 }
-            }
-            @keyframes break-warn-drop {
-                0%   { transform: translateY(-100%); opacity: 0; }
-                100% { transform: translateY(0);    opacity: 1; }
             }
         `;
         document.head.appendChild(style);
@@ -172,15 +168,8 @@ export default function App() {
                 <MetricsPanel data={data} selectedLine={selectedLine} selectedLineId={selectedLineId} />
             </div>
 
-            <div style={layout.checkInBanner}>
-                <CheckInPanel
-                    team={data.directAssemblyTeam || []}
-                    activeSessions={data.activeSessions || []}
-                    latestStepCompleteByTechId={data.latestStepCompleteByTechId || {}}
-                    isOnBreakNow={!!(data.metrics && data.metrics.isOnBreakNow)}
-                    breakIdleThresholdMin={(data.metrics && data.metrics.breakIdleThresholdMin) || 5}
-                    selectedLine={selectedLine}
-                />
+            <div style={layout.techStrip}>
+                <TechnicianStrip roster={data.technicianRoster || []} />
             </div>
 
             <div style={layout.center}>
@@ -190,6 +179,7 @@ export default function App() {
                         lineMatrixRows={lineMatrixRowsForView}
                         stationRates={stationRatesForLine}
                         latestStepCompleteByAsn={data.latestStepCompleteByAsn || {}}
+                        rosterByTechId={data.technicianRosterById || {}}
                     />
                 </div>
             </div>

@@ -35,6 +35,26 @@ export const STATE_COLOURS = {
     pending:   '#ffffff',  // white frame, no tint
 };
 
+// Tech-card statuses for the per-operator strip below the KPI row. Kept on a
+// separate map so changing card palettes can't accidentally re-tint matrix tiles.
+export const TECH_STATE_COLOURS = {
+    'active':        COLOURS.green,
+    'andon':         COLOURS.red,
+    'on-break':      COLOURS.amber,
+    'between-tasks': '#22d3ee',       // cyan — "still warm", but not active
+    'idle':          COLOURS.road,    // grey — covers both "no session" and "paused
+                                      // outside a scheduled break". Rendered with a
+                                      // heavy 4 px frame so the floor lead spots them.
+};
+
+export const TECH_STATE_LABEL = {
+    'active':        'ACTIVE',
+    'andon':         'ANDON',
+    'on-break':      'ON BREAK',
+    'between-tasks': 'BETWEEN TASKS',
+    'idle':          'IDLE',
+};
+
 // Slot/build column width in the matrix — sized to fit the MR badge cleanly above.
 export const SLOT_COL_WIDTH = 78;
 // Tile width: a few pixels narrower than the column so adjacent tiles have a clear
@@ -66,7 +86,7 @@ export const layout = {
         color: COLOURS.text,
         fontFamily: FONT_STACK,
         display: 'grid',
-        gridTemplate: '56px 172px 124px 1fr 48px / 1fr',
+        gridTemplate: '56px 172px auto 1fr 48px / 1fr',
         overflow: 'hidden',
     },
     header: {
@@ -88,16 +108,17 @@ export const layout = {
         gap: 14,
         overflowX: 'auto',
     },
-    checkInBanner: {
+    techStrip: {
         gridRow: '3',
-        backgroundColor: COLOURS.panelBg,
+        backgroundColor: COLOURS.bg,
         borderBottom: `1px solid ${COLOURS.tarmac}`,
-        padding: '10px 20px',
         display: 'flex',
+        flexWrap: 'wrap',
         alignItems: 'stretch',
         gap: 10,
-        overflowX: 'auto',
-        overflowY: 'hidden',
+        padding: '10px 14px',
+        maxHeight: '40vh',
+        overflowY: 'auto',
     },
     center: {
         gridRow: '4',
@@ -107,6 +128,7 @@ export const layout = {
         backgroundColor: COLOURS.bg,
     },
     footer: {
+        gridRow: '5',
         gridColumn: '1 / -1',
         backgroundColor: COLOURS.motorway,
         display: 'flex',
@@ -198,110 +220,6 @@ export const metrics = {
         fontSize: 12,
         color: COLOURS.road,
         marginTop: 3,
-    },
-};
-
-export const checkIn = {
-    card: {
-        position: 'relative',
-        backgroundColor: COLOURS.cardBg,
-        borderRadius: 8,
-        padding: '8px 12px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        flexShrink: 0,
-        width: 220,
-        minHeight: 96,
-        overflow: 'hidden',
-    },
-    cardAndon: {
-        animation: 'andon-pulse 1.5s infinite',
-        outline: `2px solid ${COLOURS.red}`,
-        outlineOffset: -2,
-    },
-    photo: {
-        width: 56,
-        height: 56,
-        borderRadius: '50%',
-        objectFit: 'cover',
-        flexShrink: 0,
-        border: `2px solid ${COLOURS.road}`,
-        backgroundColor: COLOURS.tarmac,
-    },
-    photoPlaceholder: {
-        width: 56,
-        height: 56,
-        borderRadius: '50%',
-        flexShrink: 0,
-        border: `2px solid ${COLOURS.road}`,
-        backgroundColor: COLOURS.tarmac,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: COLOURS.frost,
-        fontSize: 18,
-        fontWeight: 700,
-    },
-    body: {
-        display: 'flex',
-        flexDirection: 'column',
-        minWidth: 0,
-        flex: 1,
-        gap: 2,
-    },
-    pill: {
-        alignSelf: 'flex-start',
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: 1,
-        textTransform: 'uppercase',
-        padding: '2px 6px',
-        borderRadius: 3,
-        marginBottom: 2,
-    },
-    name: {
-        fontSize: 13,
-        fontWeight: 700,
-        color: COLOURS.snow,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-    },
-    sub: {
-        fontSize: 11,
-        color: COLOURS.frost,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-    },
-    subDim: {
-        fontSize: 11,
-        color: COLOURS.road,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-    },
-    breakWarn: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: COLOURS.red,
-        color: COLOURS.snow,
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: 1,
-        textTransform: 'uppercase',
-        padding: '3px 8px',
-        textAlign: 'center',
-        animation: 'break-warn-drop 0.35s ease-out 1',
-    },
-    emptyMsg: {
-        color: COLOURS.road,
-        fontSize: 13,
-        alignSelf: 'center',
-        padding: '0 8px',
     },
 };
 

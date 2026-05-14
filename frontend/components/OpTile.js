@@ -1,6 +1,7 @@
 import React, {useState, useRef, useCallback, useEffect} from 'react';
 import ReactDOM from 'react-dom';
 import {COLOURS, STATE_COLOURS} from '../styles';
+import {TechSessionsPopover} from './TechnicianStrip';
 
 // Per-state photo tint at 30 % opacity. Mirrors STATE_COLOURS but pre-baked as rgba so we
 // can layer a translucent wash over the op-version photo without recomputing on each render.
@@ -45,6 +46,7 @@ const STATE_LABEL = {
     pending: '○ pending',
     na: '·  not required',
 };
+
 
 function Popover({cell, anchor, onEnter, onLeave}) {
     if (!cell || !anchor) return null;
@@ -114,15 +116,18 @@ function Popover({cell, anchor, onEnter, onLeave}) {
     );
 }
 
-export default function OpTile({cell, size = 22, width, burst = false}) {
+export default function OpTile({cell, size = 22, width, burst = false, rosterByTechId = {}}) {
     const tileWidth = width || size;
     const tileHeight = size;
     // Pie + corner badges sized off the shorter dimension so they stay square + circular
     // even when the tile is rectangular (wider than tall).
     const inner = Math.min(tileWidth, tileHeight);
     const ref = useRef(null);
+    const headshotRef = useRef(null);
     const [hovered, setHovered] = useState(null);
+    const [operatorHovered, setOperatorHovered] = useState(null);
     const closeTimer = useRef(null);
+    const operatorCloseTimer = useRef(null);
 
     const cancelClose = useCallback(() => {
         if (closeTimer.current) {
@@ -143,7 +148,29 @@ export default function OpTile({cell, size = 22, width, burst = false}) {
         setHovered({anchor: rect});
     }, [cancelClose]);
 
-    useEffect(() => () => cancelClose(), [cancelClose]);
+    const cancelOperatorClose = useCallback(() => {
+        if (operatorCloseTimer.current) {
+            clearTimeout(operatorCloseTimer.current);
+            operatorCloseTimer.current = null;
+        }
+    }, []);
+
+    const scheduleOperatorClose = useCallback(() => {
+        cancelOperatorClose();
+        operatorCloseTimer.current = setTimeout(() => setOperatorHovered(null), 120);
+    }, [cancelOperatorClose]);
+
+    const handleOperatorEnter = useCallback(() => {
+        if (!headshotRef.current) return;
+        cancelOperatorClose();
+        const rect = headshotRef.current.getBoundingClientRect();
+        setOperatorHovered({anchor: rect});
+    }, [cancelOperatorClose]);
+
+    useEffect(() => () => {
+        cancelClose();
+        cancelOperatorClose();
+    }, [cancelClose, cancelOperatorClose]);
 
     const state = cell.state || 'pending';
 
@@ -382,6 +409,27 @@ export default function OpTile({cell, size = 22, width, burst = false}) {
                         )}
                     </div>
                 )}
+                {firstOperator && (
+                    // Transparent hover-zone sitting exactly on top of the headshot — keeps
+                    // the original headshot render path untouched (so any layout regression
+                    // is impossible) while still capturing mouseenter for the popover.
+                    <div
+                        ref={headshotRef}
+                        onMouseEnter={handleOperatorEnter}
+                        onMouseLeave={scheduleOperatorClose}
+                        style={{
+                            position: 'absolute',
+                            top: 1,
+                            right: 1,
+                            width: headshotSize,
+                            height: headshotSize,
+                            borderRadius: '50%',
+                            background: 'transparent',
+                            cursor: 'pointer',
+                            zIndex: 5,
+                        }}
+                    />
+                )}
                 {minuteLabel && (
                     <div
                         title={`${Math.round(cell.completionMinutes)} minutes${cell.needed > 1 ? ` (avg per repeat, ${cell.needed} repeats)` : ''}`}
@@ -434,12 +482,20 @@ export default function OpTile({cell, size = 22, width, burst = false}) {
                     </div>
                 )}
             </div>
-            {hovered && (
+            {hovered && !operatorHovered && (
                 <Popover
                     cell={cell}
                     anchor={hovered.anchor}
                     onEnter={cancelClose}
                     onLeave={scheduleClose}
+                />
+            )}
+            {operatorHovered && firstOperator && rosterByTechId[firstOperator.id] && (
+                <TechSessionsPopover
+                    entry={rosterByTechId[firstOperator.id]}
+                    anchor={operatorHovered.anchor}
+                    onEnter={cancelOperatorClose}
+                    onLeave={scheduleOperatorClose}
                 />
             )}
         </>

@@ -68,27 +68,6 @@ export function computeTaktTime(availableHours, targetOutput) {
     return hrs / target;
 }
 
-export function computeLineBalance(stationCycleTimes) {
-    const times = stationCycleTimes.filter(t => t > 0);
-    if (times.length === 0) return 0;
-    const sum = times.reduce((a, b) => a + b, 0);
-    const bottleneck = Math.max(...times);
-    if (bottleneck === 0) return 0;
-    return (sum / (times.length * bottleneck)) * 100;
-}
-
-export function findBottleneck(stationCycleTimes) {
-    let maxTime = 0;
-    let bottleneckStation = null;
-    for (const [station, time] of Object.entries(stationCycleTimes)) {
-        if (time > maxTime) {
-            maxTime = time;
-            bottleneckStation = station;
-        }
-    }
-    return bottleneckStation;
-}
-
 export function computeYamazumi(completedSessions) {
     if (!completedSessions || completedSessions.length === 0) {
         return {va: 0, nva: 0, breakTime: 0, total: 0};

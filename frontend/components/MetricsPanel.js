@@ -185,28 +185,20 @@ export default function MetricsPanel({data, selectedLine, selectedLineId}) {
     const openDefects = (data.openDefects || []).filter(matchesLine);
     const andonAlerts = (data.andonAlerts || []).filter(matchesLine);
     // Andon alerts are flattened to one entry per (andon record, linked session). "Unique" =
-    // distinct operation versions currently affected — two separate andon records raised
-    // against the same op-version collapse to 1. "Total" = the flattened count, i.e. how
-    // many in-progress sessions are impacted. Alerts whose session has no resolvable
-    // op-version are keyed by record id so they count individually rather than silently
+    // distinct PARENT operations currently affected — two andon sessions on different
+    // versions of the same op (e.g. OP-0558-v1 and OP-0558-v2) collapse to 1, because
+    // the floor lead reads them as "the same problem". "Total" = the flattened count,
+    // i.e. how many sessions are impacted. Alerts whose session has no resolvable
+    // operation are keyed by record id so they count individually rather than silently
     // merging into a single "no-op" bucket.
     const uniqueAndons = new Set(
-        andonAlerts.map(a => a.opVerId || `__noop__${a.id}`)
+        andonAlerts.map(a => a.operationId || `__noop__${a.id}`)
     ).size;
     const totalAndons = andonAlerts.length;
     return (
         <>
-            <MetricCard label="WiP" value={m.wipCount} sub="units in progress" />
-            <MetricCard label="On Floor" value={`${m.attendance.checkedIn}/${m.attendance.total}`} colour={COLOURS.green} />
-            <MetricCard label="Completed" value={m.completedToday} sub="today" />
             <ProductionRateCard pr={pr} />
             <PaceCard pace={pace} />
-            <MetricCard
-                label="Line Balance"
-                value={`${m.lineBalancePct}%`}
-                colour={m.lineBalancePct >= 80 ? COLOURS.green : m.lineBalancePct >= 60 ? COLOURS.amber : COLOURS.red}
-            />
-            <MetricCard label="Bottleneck" value={m.bottleneckStation || '—'} sub="longest cycle" />
             <MetricCard
                 label="Live Defects"
                 value={openDefects.length}
