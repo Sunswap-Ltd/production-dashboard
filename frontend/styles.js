@@ -35,6 +35,27 @@ export const STATE_COLOURS = {
     pending:   '#ffffff',  // white frame, no tint
 };
 
+// Slot/build column width in the matrix — sized to fit the MR badge cleanly above.
+export const SLOT_COL_WIDTH = 78;
+// Tile width: a few pixels narrower than the column so adjacent tiles have a clear
+// vertical gutter. Wide enough that op-version photos don't read as squashed strips.
+export const TILE_WIDTH = 68;
+// Tile height: bumped above the legacy 38 px to give overlay badges (⚠ / headshot /
+// minute / ASN id) breathing room on the now-wider tile, and to make the photo's
+// aspect ratio more photo-like.
+export const TILE_HEIGHT = 44;
+// Vertical padding around each tile in its cell — produces the row-to-row gutter so
+// matrix rows aren't flush against each other.
+export const TILE_ROW_PAD = 3;
+
+// RAG fill/tint helpers for the Production Rate chart and per-station chips.
+// `wash` is the soft chart background; `chip` is the pill colour; `fill` is the solid colour.
+export const RAG = {
+    green: {fill: COLOURS.green, wash: 'rgba(34, 197, 94, 0.10)', chip: 'rgba(34, 197, 94, 0.85)'},
+    amber: {fill: COLOURS.amber, wash: 'rgba(234, 179, 8, 0.10)', chip: 'rgba(234, 179, 8, 0.85)'},
+    red:   {fill: COLOURS.red,   wash: 'rgba(239, 68, 68, 0.10)', chip: 'rgba(239, 68, 68, 0.85)'},
+};
+
 const FONT_STACK = "'Arbeit', Arial, Helvetica, Calibri, sans-serif";
 
 export const layout = {

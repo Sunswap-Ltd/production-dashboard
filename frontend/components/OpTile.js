@@ -114,7 +114,12 @@ function Popover({cell, anchor, onEnter, onLeave}) {
     );
 }
 
-export default function OpTile({cell, size = 22}) {
+export default function OpTile({cell, size = 22, width, burst = false}) {
+    const tileWidth = width || size;
+    const tileHeight = size;
+    // Pie + corner badges sized off the shorter dimension so they stay square + circular
+    // even when the tile is rectangular (wider than tall).
+    const inner = Math.min(tileWidth, tileHeight);
     const ref = useRef(null);
     const [hovered, setHovered] = useState(null);
     const closeTimer = useRef(null);
@@ -149,8 +154,8 @@ export default function OpTile({cell, size = 22}) {
                 onMouseEnter={handleEnter}
                 onMouseLeave={scheduleClose}
                 style={{
-                    width: size,
-                    height: size,
+                    width: tileWidth,
+                    height: tileHeight,
                     borderRadius: 3,
                     border: `1px dashed ${COLOURS.tarmac}`,
                     background: 'transparent',
@@ -190,9 +195,9 @@ export default function OpTile({cell, size = 22}) {
     const pieColour = STATE_COLOURS[state] || COLOURS.green;
     const firstOperator = cell.liveOperators && cell.liveOperators.length > 0 ? cell.liveOperators[0] : null;
     const extraOperators = cell.liveOperators ? Math.max(0, cell.liveOperators.length - 1) : 0;
-    const headshotSize = Math.max(13, Math.round(size * 0.42));
+    const headshotSize = Math.max(13, Math.round(inner * 0.5));
     const hasWarning = cell.warning && cell.warning.length > 0;
-    const warningBadgeSize = Math.max(13, Math.round(size * 0.42));
+    const warningBadgeSize = Math.max(13, Math.round(inner * 0.5));
 
     // Strip the "ASN-" prefix for the top-centre badge — the column already implies it's an
     // assembly session, and the bare digits fit at 38 px. The +N suffix flags additional
@@ -208,10 +213,11 @@ export default function OpTile({cell, size = 22}) {
                 ref={ref}
                 onMouseEnter={handleEnter}
                 onMouseLeave={scheduleClose}
+                className={burst ? 'op-tile-burst' : undefined}
                 style={{
                     position: 'relative',
-                    width: size,
-                    height: size,
+                    width: tileWidth,
+                    height: tileHeight,
                     borderRadius: 3,
                     border: `${borderWidth}px solid ${borderColour}`,
                     // White base layer under every ASN cell so transparent / letterboxed
@@ -221,7 +227,10 @@ export default function OpTile({cell, size = 22}) {
                     flexShrink: 0,
                     boxSizing: 'border-box',
                     cursor: 'help',
-                    ...(state === 'andon'
+                    ...(burst ? {zIndex: 4} : {}),
+                    // Burst supersedes the andon pulse for its ~1s lifetime so the two animations
+                    // don't fight on the same element. Andon resumes on the next render after.
+                    ...(state === 'andon' && !burst
                         ? cell.andonUnknown
                             ? {animation: 'andon-pulse-large 0.9s ease-in-out infinite'}
                             : {animation: 'andon-pulse 1.5s ease-in-out infinite'}
@@ -264,8 +273,8 @@ export default function OpTile({cell, size = 22}) {
                             top: '50%',
                             left: '50%',
                             transform: 'translate(-50%, -50%)',
-                            width: Math.round(size * 0.62),
-                            height: Math.round(size * 0.62),
+                            width: Math.round(inner * 0.62),
+                            height: Math.round(inner * 0.62),
                             borderRadius: '50%',
                             background: `conic-gradient(${pieColour} ${piePct}%, rgba(0,0,0,0.55) ${piePct}%)`,
                             boxShadow: '0 0 3px rgba(0,0,0,0.55)',
@@ -279,7 +288,7 @@ export default function OpTile({cell, size = 22}) {
                             borderRadius: '50%',
                             background: 'rgba(0,0,0,0.85)',
                             color: COLOURS.snow,
-                            fontSize: Math.max(7, Math.round(size * 0.22)),
+                            fontSize: Math.max(7, Math.round(inner * 0.22)),
                             fontWeight: 700,
                             display: 'flex',
                             alignItems: 'center',

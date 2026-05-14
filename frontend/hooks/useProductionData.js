@@ -1,8 +1,12 @@
 import {useMemo} from 'react';
 import {useBase, useRecords} from '@airtable/blocks/interface/ui';
-import {TABLES, FIELDS, ASN_STATUS, GOODS_STATUS, EMPLOYEE_STATUS, CHECKIN_STATUS, DEFECT_STATUS} from '../engine/constants';
-import {safeStr, safeNum, safeLink, safeAttachment, durationToHours} from '../engine/helpers';
-import {computeYamazumi, computeAttendance, computeLineBalance, findBottleneck} from '../engine/calculations';
+import {TABLES, FIELDS, ASN_STATUS, GOODS_STATUS, EMPLOYEE_STATUS, CHECKIN_STATUS, DEFECT_STATUS, KPI_PRODUCTION_RATE_TARGET} from '../engine/constants';
+import {safeStr, safeNum, safeLink, safeAttachment, durationToHours, parsePercentString, isToday} from '../engine/helpers';
+import {
+    computeYamazumi, computeAttendance, computeLineBalance, findBottleneck,
+    parseShiftSettings, productiveMinutesPerShift, elapsedProductiveMinutes,
+    expectedBuildPctByNow, productionRateStatus, paceStatus,
+} from '../engine/calculations';
 
 function getTable(base, name) {
     return base.getTableByNameIfExists(name);
@@ -29,6 +33,8 @@ export function useProductionData() {
     const timesheetsTable = getTable(base, TABLES.TIMESHEETS);
     const settingsTable = getTable(base, TABLES.SETTINGS);
     const defectsTable = getTable(base, TABLES.DEFECTS);
+    const sessionStepsTable = getTable(base, TABLES.SESSION_STEPS);
+    const kpiRecordsTable = getTable(base, TABLES.KPI_RECORDS);
 
     const fallback = base.tables[0];
     const sessionRecords = useRecords(sessionsTable || fallback);
@@ -45,6 +51,8 @@ export function useProductionData() {
     const timesheetRecords = useRecords(timesheetsTable || fallback);
     const settingsRecords = useRecords(settingsTable || fallback);
     const defectRecords = useRecords(defectsTable || fallback);
+    const sessionStepRecords = useRecords(sessionStepsTable || fallback);
+    const kpiRecords = useRecords(kpiRecordsTable || fallback);
 
     return useMemo(() => {
         const requiredTables = [
@@ -181,6 +189,8 @@ export function useProductionData() {
                     vmrName: vmrLinks.length > 0 ? vmrLinks[0].name : '',
                     opVersionId: opLinks.length > 0 ? opLinks[0].id : null,
                     repeats: safeNum(r, FIELDS.VCONFIG.REPEATS, 1),
+                    percentageOfVariant: safeNum(r, FIELDS.VCONFIG.PERCENTAGE_OF_VARIANT, 0),
+                    cycleTimeHours: safeNum(r, FIELDS.VCONFIG.CYCLE_TIME_HOURS, 0),
                 });
             }
         }
@@ -1054,6 +1064,256 @@ export function useProductionData() {
             return an.localeCompare(bn);
         });
 
+        // --- Production rate (cumulative vs target) + Pace + per-station rates ---
+        // Shift config comes from the Settings table records already loaded above.
+        const shiftConfig = parseShiftSettings((settingsTable ? settingsRecords : []).map(r => ({
+            variable: safeStr(r, FIELDS.SETTING.VARIABLE),
+            value: safeStr(r, FIELDS.SETTING.VALUE),
+        })));
+        const productiveMinutesTotal = productiveMinutesPerShift(shiftConfig);
+        const now = new Date();
+        const productiveMinutesElapsed = elapsedProductiveMinutes(shiftConfig, now);
+
+        // Daily target from KPI Records (KPI-376 for today). Fall back to most-recent prior
+        // log, else a sensible default. Surface the fallback state so the UI can flag it.
+        let dailyTargetPct = 100;
+        let targetSource = 'fallback';
+        let targetSourceDate = null;
+        if (kpiRecordsTable) {
+            const candidates = [];
+            for (const r of kpiRecords) {
+                const kpi = safeStr(r, FIELDS.KPI_RECORD.KPI);
+                if (kpi !== KPI_PRODUCTION_RATE_TARGET) continue;
+                const dateStr = safeStr(r, FIELDS.KPI_RECORD.DATE);
+                const metric = safeNum(r, FIELDS.KPI_RECORD.METRIC, NaN);
+                if (!Number.isFinite(metric)) continue;
+                candidates.push({dateStr, metric});
+            }
+            const todayMatch = candidates.find(c => isToday(c.dateStr));
+            // Airtable percent fields return a fraction (0..1); other numeric fields may already
+            // be in percent. Treat values <= 1 as fractions, else as already-in-percent.
+            const toPct = (m) => (m > 1 ? m : m * 100);
+            if (todayMatch) {
+                dailyTargetPct = toPct(todayMatch.metric);
+                targetSource = 'today';
+                targetSourceDate = todayMatch.dateStr;
+            } else if (candidates.length > 0) {
+                candidates.sort((a, b) => (b.dateStr || '').localeCompare(a.dateStr || ''));
+                const latest = candidates[0];
+                dailyTargetPct = toPct(latest.metric);
+                targetSource = 'previous';
+                targetSourceDate = latest.dateStr;
+            }
+        }
+
+        const expectedByNowPct = expectedBuildPctByNow(
+            dailyTargetPct, productiveMinutesTotal, productiveMinutesElapsed,
+        );
+
+        // Per-line set of build ids in view + the most-recent-in-progress slot's VMR (used as
+        // anchor for per-station share — same anchor the matrix already uses for `repeatsLatest`).
+        const lineBuildIdsByLineId = {};
+        const lineVmrByLineId = {};
+        for (const lineId of Object.keys(slotsByLineId)) {
+            const slots = slotsByLineId[lineId] || [];
+            const set = new Set();
+            let latest = null;
+            for (const sl of slots) {
+                if (sl.buildId) set.add(sl.buildId);
+                if (sl.isAssembling && (!latest || (sl.slotNum || 0) > (latest.slotNum || 0))) {
+                    latest = sl;
+                }
+            }
+            lineBuildIdsByLineId[lineId] = set;
+            lineVmrByLineId[lineId] = latest ? latest.variantMfgRelease : null;
+        }
+
+        // Map ASN record-id → {buildId, station} from the already-parsed sessions, so a Session
+        // Step (linked to its parent ASN by record id) can be projected onto a line + station.
+        const asnMeta = {};
+        for (const s of allSessions) {
+            asnMeta[s.id] = {buildId: s.buildId, station: s.station};
+        }
+
+        // Per-line buckets of completed steps for the day, plus a global latest-step-time per
+        // ASN that the Matrix uses to fire its burst animation when a step ticks over.
+        const stepsTodayByLineId = {};
+        const latestStepCompleteByAsn = {};
+        const todayStart = new Date(now);
+        todayStart.setHours(0, 0, 0, 0);
+        const todayMs = todayStart.getTime();
+
+        if (sessionStepsTable) {
+            for (const r of sessionStepRecords) {
+                const asnLinks = safeLink(r, FIELDS.STEP.ASN);
+                if (asnLinks.length === 0) continue;
+                const asnRecordId = asnLinks[0].id;
+                const meta = asnMeta[asnRecordId];
+                if (!meta || !meta.buildId) continue;
+
+                let status = false;
+                try { status = !!r.getCellValue(FIELDS.STEP.STATUS); } catch { /* */ }
+                if (!status) continue;
+
+                const completeStr = safeStr(r, FIELDS.STEP.COMPLETE_TIME);
+                if (!completeStr) continue;
+                const completeMs = new Date(completeStr).getTime();
+                if (!Number.isFinite(completeMs)) continue;
+
+                // Track latest step completion per ASN (record id) for the burst animation.
+                if (!latestStepCompleteByAsn[asnRecordId] || completeStr > latestStepCompleteByAsn[asnRecordId]) {
+                    latestStepCompleteByAsn[asnRecordId] = completeStr;
+                }
+
+                if (completeMs < todayMs) continue;
+
+                let lineIdForStep = null;
+                for (const lineId of Object.keys(lineBuildIdsByLineId)) {
+                    if (lineBuildIdsByLineId[lineId].has(meta.buildId)) {
+                        lineIdForStep = lineId;
+                        break;
+                    }
+                }
+                if (!lineIdForStep) continue;
+
+                const pctRaw = safeStr(r, FIELDS.STEP.BUILD_PCT_PER_STEP);
+                const pct = parsePercentString(pctRaw);
+                if (!(pct > 0)) continue;
+
+                const stepDate = new Date(completeMs);
+                const productiveMin = elapsedProductiveMinutes(shiftConfig, stepDate);
+
+                if (!stepsTodayByLineId[lineIdForStep]) stepsTodayByLineId[lineIdForStep] = [];
+                stepsTodayByLineId[lineIdForStep].push({
+                    productiveMin,
+                    pct,
+                    station: meta.station || '',
+                    asnRecordId,
+                    completeMs,
+                });
+            }
+        }
+
+        // Station share of a build = Σ VMR-OV.PercentageOfVariant for ops at this station.
+        // Returned in percent points (e.g. 18.4 means 18.4% of a build).
+        const stationShareForVmr = (vmrName) => {
+            if (!vmrName) return {};
+            const share = {};
+            for (const vc of variantConfigs) {
+                if (vc.vmrName !== vmrName) continue;
+                const opVer = opVersionsById[vc.opVersionId];
+                if (!opVer || !opVer.station) continue;
+                const pct = vc.percentageOfVariant > 1
+                    ? vc.percentageOfVariant
+                    : vc.percentageOfVariant * 100;
+                share[opVer.station] = (share[opVer.station] || 0) + pct;
+            }
+            return share;
+        };
+
+        const productionRateByLineId = {};
+        const paceByLineId = {};
+        const stationRatesByLineId = {};
+
+        const BUCKET_MIN = 5;
+
+        for (const lineId of Object.keys(slotsByLineId)) {
+            const steps = (stepsTodayByLineId[lineId] || []).slice().sort(
+                (a, b) => a.completeMs - b.completeMs,
+            );
+
+            const actualPct = steps.reduce((acc, s) => acc + s.pct, 0);
+
+            // 5-min bucketed cumulative actual series up to "now" for the line graph.
+            const actualPoints = [{productiveMin: 0, cumPct: 0}];
+            let running = 0;
+            let nextEdge = BUCKET_MIN;
+            for (const st of steps) {
+                while (st.productiveMin > nextEdge && nextEdge <= productiveMinutesTotal) {
+                    actualPoints.push({productiveMin: nextEdge, cumPct: running});
+                    nextEdge += BUCKET_MIN;
+                }
+                running += st.pct;
+            }
+            const cutoff = Math.min(productiveMinutesElapsed, productiveMinutesTotal);
+            actualPoints.push({productiveMin: cutoff, cumPct: running});
+
+            const deltaPct = actualPct - expectedByNowPct;
+            const status = productionRateStatus(actualPct, expectedByNowPct);
+
+            productionRateByLineId[lineId] = {
+                actualPct,
+                targetPct: dailyTargetPct,
+                expectedByNowPct,
+                deltaPct,
+                status,
+                targetSource,
+                targetSourceDate,
+                productiveMinutesElapsed,
+                productiveMinutesTotal,
+                series: {
+                    productiveMinutesTotal,
+                    productiveMinutesNow: cutoff,
+                    actualPoints,
+                    targetPoints: [
+                        {productiveMin: 0, cumPct: 0},
+                        {productiveMin: productiveMinutesTotal, cumPct: dailyTargetPct},
+                    ],
+                },
+            };
+
+            // Pace: shift-average so far + rolling last-60-productive-minute pace.
+            const productiveHoursElapsed = productiveMinutesElapsed / 60;
+            const productiveHoursTotal = productiveMinutesTotal / 60;
+            const actualPacePctPerHr = productiveHoursElapsed > 0
+                ? actualPct / productiveHoursElapsed
+                : 0;
+            const targetPacePctPerHr = productiveHoursTotal > 0
+                ? dailyTargetPct / productiveHoursTotal
+                : 0;
+            const recentCutoffMin = Math.max(0, productiveMinutesElapsed - 60);
+            const recentSum = steps
+                .filter(s => s.productiveMin >= recentCutoffMin && s.productiveMin <= productiveMinutesElapsed)
+                .reduce((a, s) => a + s.pct, 0);
+            const recentWindowHrs = Math.min(60, productiveMinutesElapsed) / 60;
+            const recentPacePctPerHr = recentWindowHrs > 0 ? recentSum / recentWindowHrs : 0;
+
+            paceByLineId[lineId] = {
+                actualPacePctPerHr,
+                recentPacePctPerHr,
+                targetPacePctPerHr,
+                status: paceStatus(recentPacePctPerHr || actualPacePctPerHr, targetPacePctPerHr),
+            };
+
+            // Per-station rate vs station's share of the day's target.
+            const anchorVmr = lineVmrByLineId[lineId];
+            const shareByStation = stationShareForVmr(anchorVmr);
+            const stationActual = {};
+            for (const st of steps) {
+                if (!st.station) continue;
+                stationActual[st.station] = (stationActual[st.station] || 0) + st.pct;
+            }
+            const stationRates = {};
+            for (const stationTitle of Object.keys(shareByStation)) {
+                const share = shareByStation[stationTitle];
+                if (!(share > 0)) continue;
+                const dailyTargetForStation = dailyTargetPct * share / 100;
+                const expected = expectedBuildPctByNow(
+                    dailyTargetForStation, productiveMinutesTotal, productiveMinutesElapsed,
+                );
+                const actualForStation = stationActual[stationTitle] || 0;
+                stationRates[stationTitle] = {
+                    share,
+                    dailyTarget: dailyTargetForStation,
+                    expectedByNow: expected,
+                    actualToday: actualForStation,
+                    delta: actualForStation - expected,
+                    status: productionRateStatus(actualForStation, expected),
+                };
+            }
+            stationRatesByLineId[lineId] = stationRates;
+        }
+
         // --- Compute metrics ---
         const stationCycleTimes = {};
         for (const s of stations) {
@@ -1198,7 +1458,14 @@ export function useProductionData() {
                 bottleneckStation,
                 avgProductionRate: Math.round(avgProductionRate * 10) / 10,
                 attendance,
+                productionRateByLineId,
+                paceByLineId,
+                stationRatesByLineId,
+                shiftConfig,
+                productiveMinutesElapsed,
+                productiveMinutesTotal,
             },
+            latestStepCompleteByAsn,
             settings,
             settingsTable, // exposed so the popover can call updateRecordAsync
             openDefects,
@@ -1208,5 +1475,6 @@ export function useProductionData() {
         sessionRecords, buildRecords, vmrRecords, vconfigRecords,
         stationRecords, lineRecords, areaRecords, opVersionRecords, teamRecords,
         buildSlotRecords, timesheetRecords, settingsRecords, defectRecords,
+        sessionStepRecords, kpiRecords,
     ]);
 }

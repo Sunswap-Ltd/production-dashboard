@@ -1,16 +1,15 @@
-import React from 'react';
-import {COLOURS} from '../styles';
+import React, {useEffect, useRef, useState} from 'react';
+import {COLOURS, RAG, SLOT_COL_WIDTH, TILE_WIDTH, TILE_HEIGHT, TILE_ROW_PAD} from '../styles';
 import {formatDuration} from '../engine/helpers';
 import {hashString, colourForArea, AREA_PALETTE, AREA_NEUTRAL} from '../engine/colours';
 import OpTile from './OpTile';
 
-const CELL_SIZE = 38;
-const GAP = 4;
+const CELL_SIZE = TILE_HEIGHT;
 // Transposed layout: ops are rows, slots are columns.
 // Operation row label column (sticky left) — wide enough to fit the full op title horizontally.
 const OP_LABEL_W = 280;
 // Slot column width (sticky top) — fits slot info: number, nickname, progress bar, MR badge.
-const SLOT_COL_W = 78;
+const SLOT_COL_W = SLOT_COL_WIDTH;
 
 // Status display — short labels only. All in-flight statuses get a visible label so
 // every slot column has the same number of lines (otherwise "Assembling" slots collapse
@@ -177,10 +176,43 @@ function SlotColumnHeader({slot}) {
     );
 }
 
-function LineSection({line, rows}) {
+// Inline RAG chip showing `actual / expected-by-now` for a station, sitting beside the
+// station title (not floated to the far edge). Colour comes from RAG.chip; no glyph —
+// the colour conveys status and a glyph would be redundant at this scale.
+function StationRateChip({rate}) {
+    if (!rate || !(rate.dailyTarget > 0)) return null;
+    const rag = RAG[rate.status] || RAG.amber;
+    return (
+        <span
+            title={`station target ${rate.dailyTarget.toFixed(2)}% · expected by now ${rate.expectedByNow.toFixed(2)}% · actual ${rate.actualToday.toFixed(2)}%`}
+            style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                background: rag.chip,
+                color: COLOURS.snow,
+                fontSize: 11,
+                fontWeight: 700,
+                padding: '2px 8px',
+                borderRadius: 10,
+                whiteSpace: 'nowrap',
+                fontVariantNumeric: 'tabular-nums',
+            }}
+        >
+            {rate.actualToday.toFixed(1)} / {rate.expectedByNow.toFixed(1)}%
+        </span>
+    );
+}
+
+function LineSection({line, rows, stationRates, pulsingAsnIds}) {
     const stationGroups = line.stations || [];
     const slots = rows || [];
     if (stationGroups.length === 0 || slots.length === 0) return null;
+
+    // Track which area we've already labelled so the caption appears only on the FIRST
+    // station of each area block (and the row's row-tint still flags every following
+    // station as belonging to the same area).
+    const seenAreas = new Set();
 
     const colCount = slots.length + 1; // +1 for the op-label sticky column
 
@@ -240,9 +272,15 @@ function LineSection({line, rows}) {
                 <tbody>
                     {stationGroups.map((station, si) => {
                         const areaCol = colourForArea(station);
+                        // Only show the area caption on the FIRST station of each area block;
+                        // the row-tint already conveys "same area" for the following stations.
+                        const showAreaCaption = !!station.areaTitle && !seenAreas.has(station.areaTitle);
+                        if (station.areaTitle) seenAreas.add(station.areaTitle);
+                        const rate = stationRates[station.stationTitle];
                         return (
                             <React.Fragment key={`stn-${station.stationTitle}`}>
-                                {/* Station banner — title + inline area badge */}
+                                {/* Station banner — title + inline RAG chip; area as caption below
+                                    (first station of each area block only, to avoid repetition). */}
                                 <tr>
                                     <th
                                         colSpan={colCount}
@@ -251,40 +289,36 @@ function LineSection({line, rows}) {
                                             position: 'sticky',
                                             left: 0,
                                             background: areaCol.row,
-                                            padding: '8px 10px 5px',
+                                            padding: '8px 12px 5px',
                                             textAlign: 'left',
                                             whiteSpace: 'nowrap',
                                             borderTop: si > 0 ? `1px solid ${COLOURS.tarmac}` : 'none',
                                             zIndex: 2,
                                         }}
                                     >
-                                        <span style={{
-                                            fontSize: 11,
-                                            fontWeight: 700,
-                                            color: COLOURS.snow,
-                                            textTransform: 'uppercase',
-                                            letterSpacing: 0.6,
-                                            verticalAlign: 'middle',
-                                        }}>
-                                            {station.stationTitle}
-                                        </span>
-                                        {station.areaTitle && (
+                                        <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
                                             <span style={{
-                                                marginLeft: 10,
-                                                background: areaCol.badgeBg,
-                                                border: `1px solid ${areaCol.badgeBorder}`,
-                                                color: areaCol.text,
-                                                fontSize: 9,
+                                                fontSize: 12,
                                                 fontWeight: 700,
-                                                padding: '2px 6px',
-                                                borderRadius: 3,
+                                                color: COLOURS.snow,
                                                 textTransform: 'uppercase',
-                                                letterSpacing: 0.5,
-                                                verticalAlign: 'middle',
-                                                whiteSpace: 'nowrap',
+                                                letterSpacing: 0.6,
+                                            }}>
+                                                {station.stationTitle}
+                                            </span>
+                                            <StationRateChip rate={rate} />
+                                        </div>
+                                        {showAreaCaption && (
+                                            <div style={{
+                                                color: areaCol.text || COLOURS.frost,
+                                                fontSize: 10,
+                                                fontWeight: 600,
+                                                marginTop: 2,
+                                                letterSpacing: 0.8,
+                                                fontVariant: 'small-caps',
                                             }}>
                                                 {station.areaTitle}
-                                            </span>
+                                            </div>
                                         )}
                                     </th>
                                 </tr>
@@ -365,6 +399,10 @@ function LineSection({line, rows}) {
                                                 const cellKey = `${station.stationTitle}::${op.colKey}`;
                                                 const cell = (slot.cells && slot.cells[cellKey])
                                                     || {state: 'na', required: false, opVerName: op.title, station: station.stationTitle};
+                                                const liveAsnRecordId = cell.liveSession ? cell.liveSession.id : null;
+                                                const isBursting = liveAsnRecordId
+                                                    ? pulsingAsnIds.has(liveAsnRecordId)
+                                                    : false;
                                                 return (
                                                     <td
                                                         key={`cell-${slot.slotId}-${op.colKey}`}
@@ -378,13 +416,20 @@ function LineSection({line, rows}) {
                                                             maxWidth: SLOT_COL_W,
                                                         }}
                                                     >
+                                                        {/* Padding wrapper produces both the horizontal AND vertical gutters
+                                                            between tiles — flush rows feel cramped on a wall display. */}
                                                         <div style={{
                                                             display: 'flex',
                                                             alignItems: 'center',
                                                             justifyContent: 'center',
-                                                            padding: GAP / 2,
+                                                            padding: `${TILE_ROW_PAD}px 0`,
                                                         }}>
-                                                            <OpTile cell={cell} size={CELL_SIZE} />
+                                                            <OpTile
+                                                                cell={cell}
+                                                                size={CELL_SIZE}
+                                                                width={TILE_WIDTH}
+                                                                burst={isBursting}
+                                                            />
                                                         </div>
                                                     </td>
                                                 );
@@ -401,10 +446,62 @@ function LineSection({line, rows}) {
     );
 }
 
-export default function Matrix({lineColumns, lineMatrixRows}) {
+// Watches the per-ASN latest-step-completion timestamps for changes between renders.
+// When a new step lands on an ASN, that ASN's record-id enters `pulsingAsnIds` for ~1.1s
+// so its OpTile mounts the `op-tile-burst` animation. Cold-start guard prevents the burst
+// from firing for steps that completed before the dashboard loaded.
+function useStepBursts(latestStepCompleteByAsn) {
+    const prevByAsnRef = useRef(null);
+    const timersRef = useRef({});
+    const [pulsingAsnIds, setPulsingAsnIds] = useState(() => new Set());
+
+    useEffect(() => {
+        const map = latestStepCompleteByAsn || {};
+        if (prevByAsnRef.current === null) {
+            prevByAsnRef.current = {...map};
+            return;
+        }
+        const newlyProgressed = [];
+        for (const asnId of Object.keys(map)) {
+            const prev = prevByAsnRef.current[asnId];
+            const next = map[asnId];
+            if (next && next !== prev) newlyProgressed.push(asnId);
+        }
+        prevByAsnRef.current = {...map};
+        if (newlyProgressed.length === 0) return;
+
+        setPulsingAsnIds(prev => {
+            const nextSet = new Set(prev);
+            for (const id of newlyProgressed) nextSet.add(id);
+            return nextSet;
+        });
+
+        for (const id of newlyProgressed) {
+            if (timersRef.current[id]) clearTimeout(timersRef.current[id]);
+            timersRef.current[id] = setTimeout(() => {
+                setPulsingAsnIds(prev => {
+                    if (!prev.has(id)) return prev;
+                    const nextSet = new Set(prev);
+                    nextSet.delete(id);
+                    return nextSet;
+                });
+                delete timersRef.current[id];
+            }, 1100);
+        }
+    }, [latestStepCompleteByAsn]);
+
+    useEffect(() => () => {
+        for (const t of Object.values(timersRef.current)) clearTimeout(t);
+    }, []);
+
+    return pulsingAsnIds;
+}
+
+export default function Matrix({lineColumns, lineMatrixRows, stationRates, latestStepCompleteByAsn}) {
     const lines = lineColumns || [];
     const rowsByLine = {};
     for (const r of (lineMatrixRows || [])) rowsByLine[r.lineId] = r.slots;
+    const pulsingAsnIds = useStepBursts(latestStepCompleteByAsn || {});
 
     if (lines.length === 0) {
         return (
@@ -433,6 +530,8 @@ export default function Matrix({lineColumns, lineMatrixRows}) {
                     key={line.lineId}
                     line={line}
                     rows={rowsByLine[line.lineId] || []}
+                    stationRates={stationRates || {}}
+                    pulsingAsnIds={pulsingAsnIds}
                 />
             ))}
         </div>

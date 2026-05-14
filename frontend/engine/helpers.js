@@ -95,6 +95,24 @@ export function isToday(dateStr) {
            d.getDate() === now.getDate();
 }
 
+export function parsePercentString(str) {
+    if (str == null) return 0;
+    if (typeof str === 'number') return str;
+    const s = String(str).trim().replace('%', '');
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
+}
+
+export function parseHHMM(str) {
+    if (!str || typeof str !== 'string') return null;
+    const m = str.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const h = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10);
+    if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+    return h * 60 + mm;
+}
+
 export function buildRecordMap(records, keyFn) {
     const map = {};
     for (const r of records) {
