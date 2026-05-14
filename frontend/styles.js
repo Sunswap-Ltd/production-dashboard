@@ -35,6 +35,26 @@ export const STATE_COLOURS = {
     pending:   '#ffffff',  // white frame, no tint
 };
 
+// Tech-card statuses for the per-operator strip below the KPI row. Kept on a
+// separate map so changing card palettes can't accidentally re-tint matrix tiles.
+export const TECH_STATE_COLOURS = {
+    'active':        COLOURS.green,
+    'andon':         COLOURS.red,
+    'on-break':      COLOURS.amber,
+    'between-tasks': '#22d3ee',       // cyan — "still warm", but not active
+    'idle':          COLOURS.road,    // grey — covers both "no session" and "paused
+                                      // outside a scheduled break". Rendered with a
+                                      // heavy 4 px frame so the floor lead spots them.
+};
+
+export const TECH_STATE_LABEL = {
+    'active':        'ACTIVE',
+    'andon':         'ANDON',
+    'on-break':      'ON BREAK',
+    'between-tasks': 'BETWEEN TASKS',
+    'idle':          'IDLE',
+};
+
 // Slot/build column width in the matrix — sized to fit the MR badge cleanly above.
 export const SLOT_COL_WIDTH = 78;
 // Tile width: a few pixels narrower than the column so adjacent tiles have a clear
@@ -66,7 +86,7 @@ export const layout = {
         color: COLOURS.text,
         fontFamily: FONT_STACK,
         display: 'grid',
-        gridTemplate: '56px 172px 1fr 48px / 1fr',
+        gridTemplate: '56px 172px auto 1fr 48px / 1fr',
         overflow: 'hidden',
     },
     header: {
@@ -88,14 +108,27 @@ export const layout = {
         gap: 14,
         overflowX: 'auto',
     },
-    center: {
+    techStrip: {
         gridRow: '3',
+        backgroundColor: COLOURS.bg,
+        borderBottom: `1px solid ${COLOURS.tarmac}`,
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'stretch',
+        gap: 10,
+        padding: '10px 14px',
+        maxHeight: '40vh',
+        overflowY: 'auto',
+    },
+    center: {
+        gridRow: '4',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
         backgroundColor: COLOURS.bg,
     },
     footer: {
+        gridRow: '5',
         gridColumn: '1 / -1',
         backgroundColor: COLOURS.motorway,
         display: 'flex',

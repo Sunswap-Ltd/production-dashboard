@@ -3,6 +3,7 @@ import {useProductionData} from './hooks/useProductionData';
 import {layout, errorStyles, header as headerStyles} from './styles';
 import HeaderBar from './components/HeaderBar';
 import MetricsPanel from './components/MetricsPanel';
+import TechnicianStrip from './components/TechnicianStrip';
 import Matrix from './components/Matrix';
 import FooterBar from './components/FooterBar';
 import SettingsPopover from './components/SettingsPopover';
@@ -167,6 +168,10 @@ export default function App() {
                 <MetricsPanel data={data} selectedLine={selectedLine} selectedLineId={selectedLineId} />
             </div>
 
+            <div style={layout.techStrip}>
+                <TechnicianStrip roster={data.technicianRoster || []} />
+            </div>
+
             <div style={layout.center}>
                 <div style={{flex: 1, position: 'relative', minHeight: 0}}>
                     <Matrix
@@ -174,6 +179,7 @@ export default function App() {
                         lineMatrixRows={lineMatrixRowsForView}
                         stationRates={stationRatesForLine}
                         latestStepCompleteByAsn={data.latestStepCompleteByAsn || {}}
+                        rosterByTechId={data.technicianRosterById || {}}
                     />
                 </div>
             </div>

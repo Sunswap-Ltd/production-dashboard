@@ -3,7 +3,7 @@ import {useBase, useRecords} from '@airtable/blocks/interface/ui';
 import {TABLES, FIELDS, ASN_STATUS, GOODS_STATUS, EMPLOYEE_STATUS, CHECKIN_STATUS, DEFECT_STATUS, KPI_PRODUCTION_RATE_TARGET} from '../engine/constants';
 import {safeStr, safeNum, safeLink, safeAttachment, durationToHours, parsePercentString, isToday} from '../engine/helpers';
 import {
-    computeYamazumi, computeAttendance, computeLineBalance, findBottleneck,
+    computeYamazumi, computeAttendance,
     parseShiftSettings, productiveMinutesPerShift, elapsedProductiveMinutes,
     expectedBuildPctByNow, productionRateStatus, paceStatus,
 } from '../engine/calculations';
@@ -74,6 +74,9 @@ export function useProductionData() {
         }
 
         // --- Parse team members ---
+        // Two picture sizes: `picture` is the small thumb that the 13–22 px headshot circles
+        // in OpTile use; `pictureLarge` is fed into the operator hover popover where the
+        // portrait renders at ~64 px and the small thumb would look pixellated.
         const teamMembersById = {};
         const teamMembers = [];
         if (teamTable) {
@@ -82,6 +85,7 @@ export function useProductionData() {
                     id: r.id,
                     name: safeStr(r, FIELDS.TEAM.NAME),
                     picture: safeAttachment(r, FIELDS.TEAM.PICTURE),
+                    pictureLarge: safeAttachment(r, FIELDS.TEAM.PICTURE, {size: 'large'}),
                     title: safeStr(r, FIELDS.TEAM.TITLE),
                     team: safeStr(r, FIELDS.TEAM.TEAM),
                     checkinStatus: safeStr(r, FIELDS.TEAM.STATUS),
@@ -92,6 +96,7 @@ export function useProductionData() {
                 teamMembers.push(m);
             }
         }
+
 
         // --- Parse operations (parent of op versions) ---
         const operationsById = {};
@@ -138,7 +143,7 @@ export function useProductionData() {
                     sequenceId: safeStr(r, FIELDS.OP_VERSION.SEQUENCE_ID),
                     operationNumber: safeStr(r, FIELDS.OP_VERSION.OPERATION_NUMBER),
                     type: safeStr(r, FIELDS.OP_VERSION.TYPE),
-                    photo: safeAttachment(r, FIELDS.OP_VERSION.PHOTO),
+                    photo: safeAttachment(r, FIELDS.OP_VERSION.PHOTO, {size: 'large'}),
                     status: safeStr(r, FIELDS.OP_VERSION.STATUS),
                     cycleSeconds,
                     operationId,
@@ -213,7 +218,13 @@ export function useProductionData() {
         for (const r of sessionRecords) {
             const asnId = safeStr(r, FIELDS.ASN.ASSEMBLY_SESSION_ID);
             const status = safeStr(r, FIELDS.ASN.STATUS);
-            const station = safeStr(r, FIELDS.ASN.STATION);
+            // Same `stripQuotes` rinse as the op-version Station: a handful of Assembly
+            // Session records have literal `"…"` characters around the station title
+            // (data-entry typo). Without stripping, the station fails to match the
+            // Stations table's title, lineNameByStationTitle[station] resolves to null,
+            // and the andon (or any other state) silently drops out of the line-scoped
+            // KPI filters in MetricsPanel — making unique/total Andons under-count.
+            const station = stripQuotes(safeStr(r, FIELDS.ASN.STATION));
             const progress = safeNum(r, FIELDS.ASN.PROGRESS, 0);
             const buildLinks = safeLink(r, FIELDS.ASN.BUILD);
             const techLinks = safeLink(r, FIELDS.ASN.TECHNICIAN);
@@ -260,6 +271,8 @@ export function useProductionData() {
                 techId,
                 techName: tech ? tech.name : '',
                 techPicture: tech ? tech.picture : null,
+                techPictureLarge: tech ? tech.pictureLarge : null,
+                techTitle: tech ? tech.title : '',
                 opVerId,
                 opVerName: opVer ? opVer.name : '',
                 opVerPhoto: opVer ? opVer.photo : null,
@@ -298,8 +311,6 @@ export function useProductionData() {
         // --- Parse builds ---
         const builds = [];
         const activeBuilds = [];
-        let wipCount = 0;
-        let completedToday = 0;
 
         for (const r of buildRecords) {
             const goodsStatus = safeStr(r, FIELDS.BUILD.GOODS_STATUS);
@@ -307,7 +318,6 @@ export function useProductionData() {
             const nickname = safeStr(r, FIELDS.BUILD.NICKNAME);
             const progress = safeNum(r, FIELDS.BUILD.PROGRESS, 0);
             const vmrText = safeStr(r, FIELDS.BUILD.VARIANT_MFG_RELEASE);
-            const completeDateStr = safeStr(r, FIELDS.BUILD.ACTUAL_GOODS_COMPLETE);
 
             const build = {
                 id: r.id,
@@ -322,18 +332,7 @@ export function useProductionData() {
             builds.push(build);
 
             if (goodsStatus === GOODS_STATUS.ASSEMBLING) {
-                wipCount++;
                 activeBuilds.push(build);
-            }
-
-            if (goodsStatus === GOODS_STATUS.COMPLETE && completeDateStr) {
-                const d = new Date(completeDateStr);
-                const now = new Date();
-                if (d.getFullYear() === now.getFullYear() &&
-                    d.getMonth() === now.getMonth() &&
-                    d.getDate() === now.getDate()) {
-                    completedToday++;
-                }
             }
         }
 
@@ -598,7 +597,7 @@ export function useProductionData() {
                         for (const e of asnEntriesForOp) existingCell._asnEntries.push(e);
                         for (const s of liveSessions) {
                             if (s.techName && !existingCell.liveOperators.find(o => o.name === s.techName)) {
-                                existingCell.liveOperators.push({name: s.techName, picture: s.techPicture});
+                                existingCell.liveOperators.push({id: s.techId, name: s.techName, picture: s.techPicture});
                             }
                         }
                         if (opVer.versionLabel && !existingCell.versionLabels.includes(opVer.versionLabel)) {
@@ -609,7 +608,7 @@ export function useProductionData() {
                         for (const s of liveSessions) {
                             if (!s.techName) continue;
                             if (!liveOperators.find(o => o.name === s.techName)) {
-                                liveOperators.push({name: s.techName, picture: s.techPicture});
+                                liveOperators.push({id: s.techId, name: s.techName, picture: s.techPicture});
                             }
                         }
                         cellMap[key] = {
@@ -722,7 +721,7 @@ export function useProductionData() {
                     for (const s of liveSessions) {
                         if (!s.techName) continue;
                         if (!liveOperators.find(o => o.name === s.techName)) {
-                            liveOperators.push({name: s.techName, picture: s.techPicture});
+                            liveOperators.push({id: s.techId, name: s.techName, picture: s.techPicture});
                         }
                     }
 
@@ -1367,32 +1366,18 @@ export function useProductionData() {
         }
 
         // --- Compute metrics ---
-        const stationCycleTimes = {};
-        for (const s of stations) {
-            const completed = completedSessionsByStation[s.title] || [];
-            if (completed.length > 0) {
-                const avg = completed.reduce((sum, c) => sum + c.actualTimeHrs, 0) / completed.length;
-                stationCycleTimes[s.title] = avg;
-            }
-        }
-
-        const lineBalancePct = computeLineBalance(Object.values(stationCycleTimes));
-        const bottleneckStation = findBottleneck(stationCycleTimes);
-
-        const activeRates = allSessions
-            .filter(s => s.status === ASN_STATUS.IN_PROGRESS && s.actualTimeHrs > 0 && s.progress > 0)
-            .map(s => s.productionRatePct);
-        const avgProductionRate = activeRates.length > 0
-            ? activeRates.reduce((a, b) => a + b, 0) / activeRates.length
-            : 0;
-
         // --- Direct assembly filter from Timesheets (active timesheet with Direct Assembly Cost checkbox ticked) ---
+        // Direct-assembly people: derived from ANY timesheet with the Direct Assembly Cost
+        // checkbox ticked (historical, not just currently-open shifts). The original
+        // implementation gated on timesheet Status = "Checked in", but the data layer
+        // doesn't reliably create open-shift records — many checked-in team members have
+        // no current "Checked in" timesheet, which would empty the set entirely.
+        // Whether they're actually on the floor right now is decided downstream by the
+        // team-member's own `checkinStatus` field, not by the timesheet status.
         const directAssemblyTeamIds = new Set();
         let timesheetSeen = false;
         if (timesheetsTable) {
             for (const r of timesheetRecords) {
-                const status = safeStr(r, FIELDS.TIMESHEET.STATUS);
-                if (status !== CHECKIN_STATUS.CHECKED_IN) continue;
                 timesheetSeen = true;
                 let isDirect = false;
                 try {
@@ -1408,6 +1393,182 @@ export function useProductionData() {
             ? teamMembers.filter(m => directAssemblyTeamIds.has(m.id))
             : teamMembers;
         const attendance = computeAttendance(directAssemblyTeam);
+
+        // Strict list for the technician banner: only techs whose currently-active
+        // timesheet has the Direct Assembly Cost checkbox ticked. No fallback to the
+        // full team — the banner is meant to mirror who's actually building right now.
+        const strictDirectAssemblyTeam = timesheetSeen
+            ? teamMembers.filter(m => directAssemblyTeamIds.has(m.id))
+            : [];
+
+        // --- Technician roster: one entry per checked-in direct-assembly tech, for the
+        // banner below the KPI strip. Status taxonomy reads off the session's own state
+        // AND the shift's scheduled break windows from Settings:
+        //   andon         — In Progress or Paused session with Andon Flag set
+        //   on-break      — Paused session, no andon, AND wall-clock is inside a
+        //                   scheduled shift break window (lunch / rest break). This is
+        //                   the legitimate "everyone's on lunch" case.
+        //   active        — In Progress session, no andon. The 5-min stale-step
+        //                   heuristic was dropped — long ops are NOT mistaken for
+        //                   breaks any more.
+        //   between-tasks — last completed session within the last minute, nothing in flight
+        //   idle          — anything else that means "not producing": nothing in flight
+        //                   AND last completion > 1 min ago, OR a paused session
+        //                   without a scheduled break. Both are equivalent for the
+        //                   floor lead — the tech isn't working when they should be.
+        //                   Rendered with a heavy grey frame as a problem flag.
+        const nowMs = now.getTime();
+
+        // Wall-clock check against scheduled shift breaks. `shiftConfig.breaks` is
+        // {startMin, endMin} in minutes-of-day. We sit inside the same React render so
+        // nowMs is captured once — no clock-drift inconsistency between cards.
+        const nowMinOfDay = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+        const isInScheduledBreakNow = (shiftConfig.breaks || []).some(b =>
+            nowMinOfDay >= b.startMin && nowMinOfDay <= b.endMin
+        );
+
+        const sessionsByTechId = {};
+        for (const s of allSessions) {
+            if (!s.techId) continue;
+            if (!sessionsByTechId[s.techId]) sessionsByTechId[s.techId] = [];
+            sessionsByTechId[s.techId].push(s);
+        }
+
+        // Used for sub-ordering and for the BETWEEN-TASKS lookback window. Not used to
+        // classify in-flight sessions any more — the session.status field is the
+        // source of truth for whether a tech is paused.
+        const stepTimeMs = (sessionRecordId) => {
+            const iso = latestStepCompleteByAsn[sessionRecordId];
+            if (!iso) return 0;
+            const t = Date.parse(iso);
+            return Number.isFinite(t) ? t : 0;
+        };
+
+        const STATUS_PRIORITY = {
+            andon: 0, idle: 1, 'on-break': 2, active: 3, 'between-tasks': 4,
+        };
+        const technicianRoster = [];
+        const technicianRosterById = {};
+        const sessionStateLabel = (s) => {
+            if (s.hasAndon) return 'andon';
+            if (s.status === ASN_STATUS.PAUSED) return 'rest';
+            if (s.status === ASN_STATUS.IN_PROGRESS) return 'in-progress';
+            if (s.status === ASN_STATUS.SCHEDULED) return 'scheduled';
+            return 'scheduled';
+        };
+        const sessionStatePriority = {andon: 0, rest: 1, 'in-progress': 2, scheduled: 3};
+        for (const tech of strictDirectAssemblyTeam) {
+            // Only checked-in current employees show in the banner — matches the
+            // attendance.checkedIn count visible elsewhere.
+            if (tech.employeeStatus !== EMPLOYEE_STATUS.CURRENT) continue;
+            if (tech.checkinStatus !== CHECKIN_STATUS.CHECKED_IN) continue;
+
+            const techSessions = sessionsByTechId[tech.id] || [];
+            const activeOrPaused = techSessions.filter(
+                s => s.status === ASN_STATUS.IN_PROGRESS || s.status === ASN_STATUS.PAUSED
+            ).sort((a, b) => stepTimeMs(b.id) - stepTimeMs(a.id));
+
+            let status = 'idle';
+            let currentSession = null;
+
+            if (activeOrPaused.length > 0) {
+                const s = activeOrPaused[0];
+                const lastStepMs = stepTimeMs(s.id);
+                const minutesSinceLastStep = lastStepMs > 0 ? (nowMs - lastStepMs) / 60000 : Infinity;
+                if (s.hasAndon) {
+                    status = 'andon';
+                } else if (s.status === ASN_STATUS.PAUSED) {
+                    // Paused during a scheduled shift break = legitimate. Paused outside
+                    // a break window collapses into the same "idle / not producing"
+                    // bucket as a tech with no session at all — both flag a problem
+                    // worth the floor lead's attention.
+                    status = isInScheduledBreakNow ? 'on-break' : 'idle';
+                } else {
+                    status = 'active';
+                }
+                currentSession = {
+                    asnId: s.asnId,
+                    opVerName: s.opVerName,
+                    opVerPhoto: s.opVerPhoto,
+                    opVerId: s.opVerId,
+                    buildId: s.buildId,
+                    buildName: s.buildName,
+                    station: s.station,
+                    lineName: lineNameByStationTitle[s.station] || null,
+                    minutesSinceLastStep,
+                };
+            } else {
+                const completed = techSessions.filter(s => s.status === ASN_STATUS.COMPLETED)
+                    .sort((a, b) => stepTimeMs(b.id) - stepTimeMs(a.id));
+                if (completed.length > 0 && stepTimeMs(completed[0].id) > 0) {
+                    const minsSinceFinish = (nowMs - stepTimeMs(completed[0].id)) / 60000;
+                    if (minsSinceFinish <= 1) {
+                        const s = completed[0];
+                        status = 'between-tasks';
+                        currentSession = {
+                            asnId: s.asnId,
+                            opVerName: s.opVerName,
+                            opVerPhoto: s.opVerPhoto,
+                            opVerId: s.opVerId,
+                            buildId: s.buildId,
+                            buildName: s.buildName,
+                            station: s.station,
+                            lineName: lineNameByStationTitle[s.station] || null,
+                            minutesSinceLastStep: minsSinceFinish,
+                        };
+                    }
+                }
+            }
+
+            // Sessions to surface in the hover popover: every Scheduled / In-Progress / Paused
+            // ASN assigned to this tech. Completed sessions excluded — banner is a "what's on
+            // their plate right now" view, not a history.
+            const assignedSessions = (sessionsByTechId[tech.id] || [])
+                .filter(s =>
+                    s.status === ASN_STATUS.IN_PROGRESS
+                    || s.status === ASN_STATUS.PAUSED
+                    || s.status === ASN_STATUS.SCHEDULED
+                )
+                .map(s => ({
+                    asnId: s.asnId,
+                    station: s.station,
+                    lineName: lineNameByStationTitle[s.station] || null,
+                    opVerName: s.opVerName,
+                    opVerPhoto: s.opVerPhoto,
+                    opVerId: s.opVerId,
+                    buildId: s.buildId,
+                    buildName: s.buildName,
+                    progress: s.progress,
+                    completionMinutes: (s.assemblyTimeHrs || 0) * 60,
+                    state: sessionStateLabel(s),
+                    hasAndon: s.hasAndon,
+                }))
+                .sort((a, b) => {
+                    const pa = sessionStatePriority[a.state] ?? 9;
+                    const pb = sessionStatePriority[b.state] ?? 9;
+                    if (pa !== pb) return pa - pb;
+                    return (a.asnId || '').localeCompare(b.asnId || '');
+                });
+
+            const entry = {
+                id: tech.id,
+                name: tech.name,
+                picture: tech.picture,
+                pictureLarge: tech.pictureLarge,
+                title: tech.title,
+                status,
+                currentSession,
+                assignedSessions,
+            };
+            technicianRoster.push(entry);
+            technicianRosterById[tech.id] = entry;
+        }
+        technicianRoster.sort((a, b) => {
+            const pa = STATUS_PRIORITY[a.status] ?? 9;
+            const pb = STATUS_PRIORITY[b.status] ?? 9;
+            if (pa !== pb) return pa - pb;
+            return (a.name || '').localeCompare(b.name || '');
+        });
 
         // --- Andon alerts: one entry per Assembly Session currently flagged as andon ---
         // Source-of-truth is the session itself (Status=Paused + Andon Flag=Andon), not the
@@ -1427,6 +1588,11 @@ export function useProductionData() {
                 areaId: areaIdByStationTitle[session.station] || null,
                 lineName: lineNameByStationTitle[session.station] || null,
                 opVerId: session.opVerId || null,
+                // Parent operation id (drives Andons KPI dedup). Two versions of the
+                // same op (e.g. OP-0558-v1 vs OP-0558-v2) share an operationId and
+                // count as one "unique" andon — what the floor lead means by "the same
+                // op". Falls back to opVerId so unlinked records still dedup by themselves.
+                operationId: (sessionOpVer && sessionOpVer.operationId) || session.opVerId || null,
                 opVerName: sessionOpVer ? sessionOpVer.name : '',
                 opVerPhoto: sessionOpVer ? sessionOpVer.photo : null,
                 // AreaBanners.Thumb reads `thumbnail` — for andons it's the op-version
@@ -1503,12 +1669,9 @@ export function useProductionData() {
             activeBuilds,
             andonAlerts,
             teamMembers,
+            technicianRoster,
+            technicianRosterById,
             metrics: {
-                wipCount,
-                completedToday,
-                lineBalancePct: Math.round(lineBalancePct),
-                bottleneckStation,
-                avgProductionRate: Math.round(avgProductionRate * 10) / 10,
                 attendance,
                 productionRateByLineId,
                 paceByLineId,

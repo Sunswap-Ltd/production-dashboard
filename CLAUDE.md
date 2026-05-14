@@ -24,6 +24,34 @@ curl -s -H "Authorization: Bearer $AIRTABLE_PERSONAL_ACCESS_TOKEN" \
 - Interface URL: https://airtable.com/appao66f0MDXFsffr/pag2KDtJh7tDE66vh/edit
 - Block ID lives in `.block/remote.json` (baseId MUST be `"NONE"` for Interface Extensions)
 
+### 🔁 Mandatory verification workflow for UI / dashboard changes
+
+Any time the user asks for a change that affects what the dashboard renders — layout, copy, new components, styling, state-driven visuals — you **must** visually verify the change on the dev server before declaring the task complete. The task is not done until you have eyes on the rendered output.
+
+**Steps, in order:**
+
+1. **Confirm the dev server is up.** Tail `/tmp/block_run.log` for `Bundle updated` after your most recent save. If it's not running, start it: `npx block run --port 9002 > /tmp/block_run.log 2>&1 &`, then `until grep -q "Bundle updated" /tmp/block_run.log; do sleep 2; done`.
+
+2. **Navigate the browser MCP tab to the interface design URL** — `https://airtable.com/appao66f0MDXFsffr/pag2KDtJh7tDE66vh/edit`. The `/edit` suffix is required; it surfaces the Development panel needed in step 3.
+
+3. **Toggle the MCP tab into dev mode** (this DOES work via browser MCP — past CLAUDE.md notes saying it doesn't are wrong, supersede them):
+   a. Click somewhere in the empty extension canvas to **select** the custom extension element. A `Page > Custom` panel appears on the right with a "Development" section.
+   b. Use `find` with query "Server URL text input under Development section, and the Develop button" — it returns two element refs (the textbox showing `https://localhost:9000/` and a `Develop` button).
+   c. `triple_click` the Server textbox ref, `type` `https://localhost:9002`, then `left_click` the Develop button ref.
+   d. **First time only**: the localhost SSL cert needs to be accepted in this MCP browser session. Open a fresh tab via `tabs_create_mcp`, navigate to `https://localhost:9002`, wait a couple of seconds (you'll see "Not found" — that's the dev server responding, cert accepted), then close that tab via `tabs_close_mcp`. The Airtable tab's iframe will then load the bundle on its next render cycle.
+   e. Once dev mode is on, the "Develop" button becomes "Stop" and the panel reads "This extension is in development mode and reflects the code that is running locally on your machine."
+   f. The dev-mode URL field does NOT persist across full page reloads. So once dev mode is on, never re-navigate the tab, never refresh — only `screenshot` / `zoom` / `scroll` / `read_console_messages` / `find` / `read_page` are safe.
+
+4. **Take a `screenshot`.** Use `zoom` to pull in on the region you changed. Compare against the expectation in the prompt.
+
+5. **Check the console** via `read_console_messages` with `onlyErrors: true`. Any red errors mean the bundle compiled but the page broke at runtime — investigate before reporting done.
+
+6. **Only report the task complete when the screenshot shows the change rendered correctly, with no console errors.**
+
+If the rendered iframe is blank after enabling dev mode, the cert step (3d) was probably skipped or the cert exception lapsed. Re-do it.
+
+This workflow supersedes the older "ASK THE USER to confirm the extension is pointed at dev mode" guidance — go look first, with your own MCP tab in dev mode.
+
 ### ⚠️ CRITICAL: Always inspect the local dev server, never the published bundle
 
 This project's dev server runs on **port 9002 — NOT the Airtable default 9000**. The "Develop" button in the Airtable extension panel pre-fills `https://localhost:9000` and you must change it to `https://localhost:9002` every single time. Claude keeps forgetting this — when the user has to tell you "the port is 9002", it means the extension is pointed at the wrong URL and your code changes won't show up no matter how many times you reload.
