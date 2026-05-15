@@ -1624,6 +1624,10 @@ export function useProductionData() {
         if (defectsTable) {
             for (const r of defectRecords) {
                 const status = safeStr(r, FIELDS.DEFECT.STATUS);
+                // Live Defects KPI reads ~0 because the workflow closes defects almost
+                // immediately — verified 2026-05-14 that all 2,548 records in the Defects
+                // table sit at 'Done' (5 created that day, all moved to 'Done' on creation).
+                // Filter is correct; the bucket is just empty in practice.
                 if (status !== DEFECT_STATUS.IN_PROGRESS) continue;
                 const opVerName = safeStr(r, FIELDS.DEFECT.OPERATION_VERSION);
                 const opVer = opVerName ? opVersionByName[opVerName] : null;

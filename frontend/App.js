@@ -154,6 +154,21 @@ export default function App() {
         ? ((data.metrics && data.metrics.stationRatesByLineId) || {})[selectedLineId] || {}
         : {};
 
+    // Split the technician roster: techs on the selected line (or idle with no current
+    // session) render as full cards; techs whose current session is on a different line
+    // get demoted to a small stacked "deck" anchored to the right of the strip.
+    const roster = data.technicianRoster || [];
+    const primaryTechs = [];
+    const deckTechs = [];
+    for (const entry of roster) {
+        const sessionLine = entry.currentSession ? entry.currentSession.lineName : null;
+        if (sessionLine && sessionLine !== selectedLine) {
+            deckTechs.push(entry);
+        } else {
+            primaryTechs.push(entry);
+        }
+    }
+
     return (
         <div style={layout.container}>
             <div style={layout.header}>
@@ -169,7 +184,7 @@ export default function App() {
             </div>
 
             <div style={layout.techStrip}>
-                <TechnicianStrip roster={data.technicianRoster || []} />
+                <TechnicianStrip primary={primaryTechs} deck={deckTechs} />
             </div>
 
             <div style={layout.center}>

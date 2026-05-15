@@ -569,9 +569,130 @@ function HoverableTechCard({entry}) {
     );
 }
 
-export default function TechnicianStrip({roster}) {
-    const list = roster || [];
-    if (list.length === 0) {
+// Small headshot-only card used in the right-aligned "deck" for technicians whose
+// current session is on a line other than the one selected. Cards overlap horizontally
+// (negative marginLeft) and rise / shed their overlap on hover so the operator's full
+// session popover can open. Re-uses TechSessionsPopover so the popover content is
+// identical to what hovering a full TechCard surfaces.
+const DECK_CARD_SIZE = 52;
+const DECK_OVERLAP_PX = 36;
+
+function DeckTechCard({entry, isFirst}) {
+    const ref = useRef(null);
+    const [hover, setHover] = useState(null);
+    const closeTimer = useRef(null);
+
+    const cancelClose = useCallback(() => {
+        if (closeTimer.current) {
+            clearTimeout(closeTimer.current);
+            closeTimer.current = null;
+        }
+    }, []);
+    const scheduleClose = useCallback(() => {
+        cancelClose();
+        closeTimer.current = setTimeout(() => setHover(null), 120);
+    }, [cancelClose]);
+    const handleEnter = useCallback(() => {
+        if (!ref.current) return;
+        cancelClose();
+        setHover({anchor: ref.current.getBoundingClientRect()});
+    }, [cancelClose]);
+
+    useEffect(() => () => cancelClose(), [cancelClose]);
+
+    const {name, picture, pictureLarge, status, currentSession} = entry;
+    const colour = TECH_STATE_COLOURS[status] || COLOURS.road;
+    const isAndon = status === 'andon';
+    const isIdle = status === 'idle';
+    const portrait = pictureLarge || picture;
+    const lineLabel = currentSession ? currentSession.lineName : '';
+
+    return (
+        <>
+            <div
+                ref={ref}
+                onMouseEnter={handleEnter}
+                onMouseLeave={scheduleClose}
+                title={`${name || ''}${lineLabel ? ' · ' + lineLabel : ''}`}
+                style={{
+                    width: DECK_CARD_SIZE,
+                    height: DECK_CARD_SIZE,
+                    borderRadius: '50%',
+                    overflow: 'visible',
+                    flexShrink: 0,
+                    background: COLOURS.cardBg,
+                    border: isIdle ? `3px solid ${COLOURS.road}` : `2.5px solid ${colour}`,
+                    boxSizing: 'border-box',
+                    marginLeft: isFirst ? 0 : -DECK_OVERLAP_PX,
+                    position: 'relative',
+                    cursor: 'default',
+                    transition: 'transform 120ms ease-out',
+                    transform: hover ? 'translateY(-4px)' : 'translateY(0)',
+                    zIndex: hover ? 9999 : 'auto',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.55)',
+                    ...(isAndon
+                        ? {animation: 'andon-pulse 1.5s ease-in-out infinite'}
+                        : {}),
+                }}
+            >
+                <div style={{
+                    width: '100%',
+                    height: '100%',
+                    borderRadius: '50%',
+                    overflow: 'hidden',
+                    background: COLOURS.motorway,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: COLOURS.snow,
+                    fontSize: 20,
+                    fontWeight: 700,
+                }}>
+                    {portrait ? (
+                        <img
+                            src={portrait}
+                            alt=""
+                            style={{width: '100%', height: '100%', objectFit: 'cover'}}
+                        />
+                    ) : (
+                        <span>{name ? name[0].toUpperCase() : '?'}</span>
+                    )}
+                </div>
+                {lineLabel && (
+                    <span title={`Assembly line: ${lineLabel}`} style={{
+                        position: 'absolute',
+                        bottom: -3,
+                        right: -3,
+                        fontSize: 8,
+                        fontWeight: 700,
+                        letterSpacing: 0.4,
+                        color: COLOURS.snow,
+                        background: COLOURS.motorway,
+                        border: `1px solid ${colour}`,
+                        padding: '1px 4px',
+                        borderRadius: 6,
+                        textTransform: 'uppercase',
+                        whiteSpace: 'nowrap',
+                        lineHeight: 1,
+                    }}>{lineAbbrev(lineLabel)}</span>
+                )}
+            </div>
+            {hover && (
+                <TechSessionsPopover
+                    entry={entry}
+                    anchor={hover.anchor}
+                    onEnter={cancelClose}
+                    onLeave={scheduleClose}
+                />
+            )}
+        </>
+    );
+}
+
+export default function TechnicianStrip({primary, deck}) {
+    const primaryList = primary || [];
+    const deckList = deck || [];
+    if (primaryList.length === 0 && deckList.length === 0) {
         return (
             <div style={{
                 fontSize: 12,
@@ -584,10 +705,45 @@ export default function TechnicianStrip({roster}) {
         );
     }
     return (
-        <>
-            {list.map(entry => (
-                <HoverableTechCard key={entry.id} entry={entry} />
-            ))}
-        </>
+        <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 8,
+            width: '100%',
+        }}>
+            <div style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 8,
+                flex: '1 1 auto',
+                minWidth: 0,
+            }}>
+                {primaryList.map(entry => (
+                    <HoverableTechCard key={entry.id} entry={entry} />
+                ))}
+            </div>
+            {deckList.length > 0 && (
+                <div
+                    title={`${deckList.length} technician${deckList.length === 1 ? '' : 's'} on other lines`}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        flexShrink: 0,
+                        paddingRight: DECK_OVERLAP_PX > 0 ? 4 : 0,
+                        paddingLeft: 8,
+                    }}
+                >
+                    {deckList.map((entry, idx) => (
+                        <DeckTechCard
+                            key={entry.id}
+                            entry={entry}
+                            isFirst={idx === 0}
+                        />
+                    ))}
+                </div>
+            )}
+        </div>
     );
 }
